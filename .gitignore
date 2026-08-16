@@ -22,7 +22,10 @@ gradle/wrapper/gradle-wrapper.jar
 Start-Carroot.bat
 process_image.py
 carroot.rc
-r1.sh
+# (upstream ignores r1.sh; this fork tracks it — it's the documented dev loop)
+
+# device captures from ./r1.sh shot / rec
+/shots/
 
 .bootstrap/
 *.zip

@@ -13,7 +13,9 @@ import java.net.URL
 
 object OTAUpdater {
     private const val TAG = "OTAUpdater"
-    private const val API_URL = "https://api.github.com/repos/khalifa007/rabbitR1Luncher/releases/latest"
+    // Points at this fork, not upstream — otherwise the on-device updater would
+    // happily overwrite your build with khalifa007's next release.
+    private const val API_URL = "https://api.github.com/repos/muratangin187/rabbitR1Luncher/releases/latest"
     // Free-space floor for /data before download + install. ~3x the typical
     // APK size: one for cacheDir, one for /data/local/tmp/update.apk, one
     // for /data/app's pre-commit staging area.

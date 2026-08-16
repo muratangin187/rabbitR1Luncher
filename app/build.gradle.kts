@@ -13,7 +13,22 @@ android {
         applicationId = "com.r1.launcher"
         minSdk = 23
         targetSdk = 33
-        versionCode = 15
+        // The copy at /system/app/R1Launcher/ is the install floor: a
+        // `/data/app` install is only accepted when its versionCode is at
+        // least as high. CarrotOS ships the launcher at versionCode 1000, so
+        // a plain release-numbered build is rejected with
+        // INSTALL_FAILED_VERSION_DOWNGRADE.
+        //
+        // Upstream handles this by editing the number and hiding the edit with
+        // `git update-index --skip-worktree`, which silently drops the change
+        // from every diff. We override it from the command line instead, so the
+        // tracked value always stays the real release number:
+        //
+        //   ./gradlew assembleDebug -Pr1.versionCode=1001
+        //
+        // `./r1.sh` reads the floor off the connected device and passes this
+        // automatically, so day-to-day you never think about it.
+        versionCode = (findProperty("r1.versionCode") as String?)?.toInt() ?: 15
         versionName = "1.1.10"
 
         // CarrotOS identity baked into the APK as a fallback for the About tray
