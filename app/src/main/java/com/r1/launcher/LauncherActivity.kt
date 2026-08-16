@@ -118,6 +118,7 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
     private val hermesClient by lazy { com.r1.launcher.hermes.HermesClient() }
     private val translatorPrefs by lazy { com.r1.launcher.translator.TranslatorPrefs.get(this) }
     private val cameraPrefs by lazy { com.r1.launcher.camera.CameraPrefs(this) }
+    private val chatPrefs by lazy { com.r1.launcher.chat.ChatPrefs(this) }
     private val translatorClient by lazy { com.r1.launcher.translator.TranslatorClient() }
     /** In-flight Translator TTS HTTP call — cancellable when a new translation
      *  arrives or the user starts a new mic capture. */
@@ -366,6 +367,30 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
                     toastSuccess("voice key saved")
                 }
             }
+        }
+    }
+
+    // Drive the chat app from adb:
+    //   adb shell "am broadcast -a com.r1.launcher.CHAT_SEND \
+    //     --es secret <controlSecret> --es text 'hello' [--ez image true]"
+    // The on-screen RetroKeyboard is a Compose surface, not an IME, so
+    // `input text` can't reach it — this is the only way to script a turn, and
+    // it doubles as the hook a companion app would use.
+    private val chatSendRx = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent?) {
+            if (!controlSecretOk(i)) return
+            val text = i?.getStringExtra("text")?.trim().orEmpty()
+            if (text.isEmpty()) { toastFail("--es text missing"); return }
+            hydrateChatPrefs()
+            if (state.chatId.isBlank()) {
+                state.chatId = com.r1.launcher.chat.ChatStore.newId()
+                state.chatTitle = "new chat"
+                state.chatMsgs.clear()
+            }
+            state.chatImageMode = i?.getBooleanExtra("image", false) == true
+            state.chatInput = text
+            if (state.panel != Panel.CHAT) state.openChat()
+            chatSend()
         }
     }
 
@@ -866,6 +891,7 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
                 state.apps.add(AppEntry.Hermes)
                 state.apps.add(AppEntry.Translator)
                 state.apps.add(AppEntry.Meetings)
+                state.apps.add(AppEntry.Chat)
                 state.apps.add(AppEntry.Camera)
                 state.apps.add(AppEntry.Testing)
                 state.apps.add(AppEntry.Settings)
@@ -932,6 +958,13 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
             registerReceiver(voiceKeyRx, keyFilter)
         }
 
+        val chatSendFilter = IntentFilter("com.r1.launcher.CHAT_SEND")
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(chatSendRx, chatSendFilter, Context.RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(chatSendRx, chatSendFilter)
+        }
+
         val openAiFilter = IntentFilter("com.r1.launcher.SET_OPENAI_KEY")
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(openAiKeyRx, openAiFilter, Context.RECEIVER_EXPORTED)
@@ -994,6 +1027,7 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
         runCatching { unregisterReceiver(packageRx) }
         runCatching { unregisterReceiver(voiceKeyRx) }
         runCatching { unregisterReceiver(openAiKeyRx) }
+        runCatching { unregisterReceiver(chatSendRx) }
         runCatching { unregisterReceiver(hermesConfigRx) }
         runCatching { unregisterReceiver(smsLocalRx) }
         runCatching { unregisterReceiver(webToggleRx) }
@@ -1238,6 +1272,12 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
             AppEntry.Meetings -> {
                 selectTone()
                 transcriberOpen()
+            }
+            AppEntry.Chat -> {
+                selectTone()
+                hydrateChatPrefs()
+                reloadChatHistory()
+                state.openChatList()
             }
             AppEntry.Camera -> {
                 selectTone()
@@ -5350,6 +5390,9 @@ override fun hermesPasteServerUrlFromClipboard() {
                             // PTT translation. Commit auto-submits to the LLM
                             // (see VoiceSink.TRANSLATOR branch in handleCommittedTranscript).
                             translatorRecordStart()
+                        } else if (state.panel == Panel.CHAT) {
+                            // Push-to-talk. Release is mirrored on UP below.
+                            chatRecordStart()
                         } else if (state.panel == Panel.GALLERY_VIEW) {
                             // Hold-to-talk for the AI image edit. Release is
                             // mirrored in the sideLongFired branch on UP.
@@ -5365,6 +5408,7 @@ override fun hermesPasteServerUrlFromClipboard() {
                         if (state.panel == Panel.TERMINAL) terminalRecordStop()
                         else if (state.panel == Panel.TRANSLATOR) translatorRecordStop()
                         else if (state.panel == Panel.GALLERY_VIEW) galleryAiRecordStop()
+                        else if (state.panel == Panel.CHAT) chatRecordStop()
                         sideLongFired = false
                         return true
                     }
@@ -6189,6 +6233,498 @@ override fun hermesPasteServerUrlFromClipboard() {
                 s.getInputStream().bufferedReader().readText()
             }
         }.getOrDefault("")
+    }
+
+    // ==================== Chat app ====================
+    //
+    // Generic AI chat: many conversations, streaming replies, push-to-talk,
+    // vision input, image generation, and optional spoken replies.
+    //
+    // Provider-agnostic by construction — ChatClient is an interface and
+    // OpenAiChatClient is one implementation. Adding Claude/Gemini means a new
+    // client plus a key lookup here, nothing in storage or UI.
+
+    private var chatCall: okhttp3.Call? = null
+    private var chatRecorder: com.r1.launcher.voice.StreamingAudioCapture? = null
+    private var chatPcm: java.io.ByteArrayOutputStream? = null
+    private var chatTtsCall: okhttp3.Call? = null
+    private var chatTtsPlayer: android.media.MediaPlayer? = null
+    private val chatJobs = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "r1-chat").apply { isDaemon = true }
+    }
+
+    private fun hydrateChatPrefs() {
+        state.chatSpeak = chatPrefs.speak
+        state.chatVoiceAutoSend = chatPrefs.voiceAutoSend
+        state.chatSystemPrompt = chatPrefs.systemPrompt
+        state.chatTextSize = chatPrefs.fontSize
+        state.chatProviderId = chatPrefs.provider.id
+        state.chatModel = chatPrefs.model
+    }
+
+    private fun reloadChatHistory() {
+        val list = com.r1.launcher.chat.ChatStore.list(this)
+        state.chatHistory.clear()
+        state.chatHistory.addAll(list)
+    }
+
+    /** Snapshot the in-memory turns to disk. Called after every completed turn. */
+    private fun persistChat() {
+        if (state.chatId.isBlank()) return
+        val msgs = state.chatMsgs.toList()
+        if (msgs.isEmpty()) return
+        val convo = com.r1.launcher.chat.Conversation(
+            id = state.chatId,
+            title = state.chatTitle,
+            provider = com.r1.launcher.chat.Provider.byId(state.chatProviderId),
+            model = state.chatModel.ifBlank { chatPrefs.model },
+            messages = msgs,
+            updatedAt = System.currentTimeMillis(),
+        )
+        chatJobs.execute {
+            com.r1.launcher.chat.ChatStore.save(this, convo)
+            ui.post { reloadChatHistory() }
+        }
+    }
+
+    override fun chatNew() {
+        chatStop()
+        state.chatId = com.r1.launcher.chat.ChatStore.newId()
+        state.chatTitle = "new chat"
+        state.chatMsgs.clear()
+        state.chatInput = ""
+        state.chatAttachment = null
+        state.chatStreaming = ""
+        state.chatResetPhase()
+        state.chatModel = chatPrefs.model
+        selectTone()
+        state.openChat()
+    }
+
+    override fun chatOpen(id: String) {
+        chatStop()
+        val convo = com.r1.launcher.chat.ChatStore.load(this, id)
+        if (convo == null) { toastFail("couldn't open chat"); return }
+        state.chatId = convo.id
+        state.chatTitle = convo.title
+        state.chatModel = convo.model
+        state.chatMsgs.clear()
+        state.chatMsgs.addAll(convo.messages)
+        state.chatInput = ""
+        state.chatAttachment = null
+        state.chatStreaming = ""
+        state.chatResetPhase()
+        selectTone()
+        state.openChat()
+    }
+
+    override fun chatDelete(id: String) {
+        if (com.r1.launcher.chat.ChatStore.delete(this, id)) {
+            if (state.chatId == id) state.chatId = ""
+            reloadChatHistory()
+            state.chatListFocus = state.chatListFocus.coerceIn(0, state.chatHistory.size + 1)
+            toast("deleted")
+        } else toastFail("couldn't delete")
+    }
+
+    override fun chatToggleImageMode() {
+        state.chatImageMode = !state.chatImageMode
+        popTone()
+    }
+
+    override fun chatToggleSpeak() {
+        chatPrefs.speak = !chatPrefs.speak
+        state.chatSpeak = chatPrefs.speak
+        if (!state.chatSpeak) cancelChatSpeech()
+        popTone()
+        toast(if (state.chatSpeak) "replies will be spoken" else "speech off")
+    }
+
+    /** Attach the newest camera photo. Reuses the Camera app's store so the two
+     *  apps share one library instead of each keeping its own. */
+    override fun chatAttachNewestPhoto() {
+        val newest = com.r1.launcher.camera.PhotoStore.list(this).firstOrNull()
+        if (newest == null) { toast("no photos yet — take one first"); return }
+        state.chatAttachment = newest.path
+        popTone()
+        toast("photo attached")
+    }
+
+    override fun chatSend() {
+        val key = cameraPrefs.openAiKey
+        if (key.isNullOrBlank()) {
+            state.chatPhase = com.r1.launcher.ChatPhase.ERROR
+            state.chatError = "no openai key — settings → creds"
+            return
+        }
+        val text = state.chatInput.trim()
+        val attachment = state.chatAttachment
+        if (text.isEmpty() && attachment == null) return
+
+        if (state.chatId.isBlank()) state.chatId = com.r1.launcher.chat.ChatStore.newId()
+        if (state.chatTitle == "new chat" && text.isNotEmpty()) {
+            state.chatTitle = com.r1.launcher.chat.Conversation.titleFrom(text)
+        }
+
+        state.chatMsgs.add(
+            com.r1.launcher.chat.ChatMsg(
+                role = com.r1.launcher.chat.Role.USER,
+                text = text,
+                imagePath = attachment,
+            )
+        )
+        state.chatInput = ""
+        state.chatAttachment = null
+        state.chatKbVisible = false
+        state.chatPinnedToBottom = true
+        state.chatScrollTick++
+        cancelChatSpeech()
+
+        if (state.chatImageMode) startChatImage(key, text) else startChatStream(key)
+    }
+
+    private fun startChatStream(key: String) {
+        state.chatPhase = com.r1.launcher.ChatPhase.WAITING
+        state.chatPhaseStartedAt = System.currentTimeMillis()
+        state.chatError = ""
+        state.chatStreaming = ""
+
+        val model = state.chatModel.ifBlank { chatPrefs.model }
+        val history = state.chatMsgs.toList()
+        chatCall = com.r1.launcher.chat.OpenAiChatClient.stream(
+            apiKey = key,
+            model = model,
+            systemPrompt = chatPrefs.effectiveSystemPrompt(),
+            history = history,
+            onDelta = { d ->
+                ui.post {
+                    if (state.chatPhase == com.r1.launcher.ChatPhase.WAITING) {
+                        state.chatPhase = com.r1.launcher.ChatPhase.STREAMING
+                    }
+                    state.chatStreaming += d
+                }
+            },
+            onDone = {
+                ui.post {
+                    val full = state.chatStreaming
+                    state.chatStreaming = ""
+                    chatCall = null
+                    if (full.isBlank()) {
+                        state.chatPhase = com.r1.launcher.ChatPhase.ERROR
+                        state.chatError = "empty reply"
+                        return@post
+                    }
+                    state.chatMsgs.add(
+                        com.r1.launcher.chat.ChatMsg(
+                            role = com.r1.launcher.chat.Role.ASSISTANT,
+                            text = full,
+                        )
+                    )
+                    state.chatResetPhase()
+                    state.chatScrollTick++
+                    persistChat()
+                    if (chatPrefs.speak) speakChat(full)
+                }
+            },
+            onError = { msg ->
+                ui.post {
+                    chatCall = null
+                    // Keep whatever streamed in — a truncated answer still has
+                    // value and throwing it away is more annoying than the error.
+                    val partial = state.chatStreaming
+                    state.chatStreaming = ""
+                    if (partial.isNotBlank()) {
+                        state.chatMsgs.add(
+                            com.r1.launcher.chat.ChatMsg(
+                                role = com.r1.launcher.chat.Role.ASSISTANT,
+                                text = partial,
+                            )
+                        )
+                        persistChat()
+                    }
+                    state.chatPhase = com.r1.launcher.ChatPhase.ERROR
+                    state.chatError = msg
+                }
+            },
+        )
+    }
+
+    private fun startChatImage(key: String, prompt: String) {
+        state.chatPhase = com.r1.launcher.ChatPhase.IMAGING
+        state.chatPhaseStartedAt = System.currentTimeMillis()
+        state.chatError = ""
+        chatJobs.execute {
+            when (val r = com.r1.launcher.camera.OpenAiClient.generateImage(key, prompt)) {
+                is com.r1.launcher.camera.OpenAiClient.Result.Err -> ui.post {
+                    state.chatPhase = com.r1.launcher.ChatPhase.ERROR
+                    state.chatError = r.message
+                }
+                is com.r1.launcher.camera.OpenAiClient.Result.Ok -> {
+                    val saved = com.r1.launcher.camera.PhotoStore.save(
+                        this, r.value, com.r1.launcher.camera.PhotoStore.Kind.AI,
+                    )
+                    ui.post {
+                        if (saved == null) {
+                            state.chatPhase = com.r1.launcher.ChatPhase.ERROR
+                            state.chatError = "couldn't save image"
+                        } else {
+                            state.chatMsgs.add(
+                                com.r1.launcher.chat.ChatMsg(
+                                    role = com.r1.launcher.chat.Role.ASSISTANT,
+                                    text = "",
+                                    imagePath = saved.path,
+                                )
+                            )
+                            state.chatResetPhase()
+                            state.chatImageMode = false
+                            state.chatScrollTick++
+                            persistChat()
+                            launchTone()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    override fun chatStop() {
+        runCatching { chatCall?.cancel() }
+        chatCall = null
+        cancelChatSpeech()
+        // A cancelled stream keeps whatever arrived, same as an errored one.
+        val partial = state.chatStreaming
+        if (partial.isNotBlank()) {
+            state.chatMsgs.add(
+                com.r1.launcher.chat.ChatMsg(
+                    role = com.r1.launcher.chat.Role.ASSISTANT,
+                    text = partial,
+                )
+            )
+            persistChat()
+        }
+        state.chatStreaming = ""
+        state.chatResetPhase()
+    }
+
+    override fun chatRetry() {
+        val key = cameraPrefs.openAiKey
+        if (key.isNullOrBlank()) { toastFail("no openai key"); return }
+        // Drop a failed assistant turn if one got appended, then re-ask.
+        while (state.chatMsgs.lastOrNull()?.role == com.r1.launcher.chat.Role.ASSISTANT) {
+            state.chatMsgs.removeAt(state.chatMsgs.size - 1)
+        }
+        if (state.chatMsgs.isEmpty()) { state.chatResetPhase(); return }
+        startChatStream(key)
+    }
+
+    // ---- push to talk ----
+
+    override fun chatRecordStart() {
+        if (state.chatWorking || state.chatPhase == com.r1.launcher.ChatPhase.RECORDING) return
+        if (cameraPrefs.openAiKey.isNullOrBlank()) {
+            state.chatPhase = com.r1.launcher.ChatPhase.ERROR
+            state.chatError = "no openai key — settings → creds"
+            return
+        }
+        if (!ensureAudioPerm()) return
+        if (transcriberBinder?.isRecording == true) { toastFail("stop recording first"); return }
+        cancelChatSpeech()
+
+        state.chatPhase = com.r1.launcher.ChatPhase.RECORDING
+        state.chatPartial = ""
+        state.chatMicLevel = 0
+        state.chatError = ""
+
+        val sink = java.io.ByteArrayOutputStream()
+        chatPcm = sink
+        val cap = com.r1.launcher.voice.StreamingAudioCapture()
+        chatRecorder = cap
+        playRecordStartTone()
+        ui.postDelayed({
+            if (chatRecorder !== cap) return@postDelayed
+            cap.start(object : com.r1.launcher.voice.StreamingAudioCapture.Callback {
+                override fun onPcm(chunk: ByteArray) { synchronized(sink) { sink.write(chunk) } }
+                override fun onLevel(levelPct: Int) { ui.post { state.chatMicLevel = levelPct } }
+                override fun onError(msg: String) {
+                    ui.post {
+                        state.chatPhase = com.r1.launcher.ChatPhase.ERROR
+                        state.chatError = "mic: $msg"
+                    }
+                }
+            })
+        }, 200)
+    }
+
+    override fun chatRecordStop() {
+        val cap = chatRecorder ?: return
+        chatRecorder = null
+        cap.close()
+        playRecordStopTone()
+        val sink = chatPcm
+        chatPcm = null
+        state.chatMicLevel = 0
+        ui.postDelayed({
+            val pcm = sink?.let { synchronized(it) { it.toByteArray() } } ?: ByteArray(0)
+            val key = cameraPrefs.openAiKey
+            if (key.isNullOrBlank()) { state.chatResetPhase(); return@postDelayed }
+            if (pcm.size < 16_000) {
+                state.chatPhase = com.r1.launcher.ChatPhase.ERROR
+                state.chatError = "too short — hold longer"
+                return@postDelayed
+            }
+            state.chatPhase = com.r1.launcher.ChatPhase.TRANSCRIBING
+            state.chatPhaseStartedAt = System.currentTimeMillis()
+            chatJobs.execute {
+                when (val t = com.r1.launcher.camera.OpenAiClient.transcribe(key, pcm)) {
+                    is com.r1.launcher.camera.OpenAiClient.Result.Err -> ui.post {
+                        state.chatPhase = com.r1.launcher.ChatPhase.ERROR
+                        state.chatError = t.message
+                        state.chatPartial = ""
+                    }
+                    is com.r1.launcher.camera.OpenAiClient.Result.Ok -> ui.post {
+                        state.chatPartial = ""
+                        state.chatInput = t.value
+                        state.chatResetPhase()
+                        if (chatPrefs.voiceAutoSend) chatSend()
+                    }
+                }
+            }
+        }, 250)
+    }
+
+    // ---- speech ----
+
+    /** Reuses the launcher's ElevenLabs voice so the chat app sounds like every
+     *  other spoken surface and inherits Settings → Voice. */
+    private fun speakChat(markdown: String) {
+        val key = voicePrefs.elevenlabsKey
+        if (key.isNullOrBlank()) { toast("set an elevenlabs key for speech"); return }
+        val plain = com.r1.launcher.ui.markdownToSpeech(markdown)
+        if (plain.isBlank()) return
+        state.chatPhase = com.r1.launcher.ChatPhase.SPEAKING
+        val out = java.io.File(cacheDir, "chat-speech.mp3")
+        chatTtsCall = com.r1.launcher.voice.ElevenLabsTtsClient.synthesize(
+            text = plain,
+            apiKey = key,
+            voiceId = voicePrefs.voiceId,
+            model = voicePrefs.model,
+            outFile = out,
+        ) { bytes, err ->
+            ui.post {
+                chatTtsCall = null
+                if (bytes == null) {
+                    if (err != null) toast("speech: $err")
+                    if (state.chatPhase == com.r1.launcher.ChatPhase.SPEAKING) state.chatResetPhase()
+                    return@post
+                }
+                runCatching {
+                    chatTtsPlayer?.release()
+                    val mp = android.media.MediaPlayer()
+                    chatTtsPlayer = mp
+                    mp.setAudioAttributes(
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    // Path, not a descriptor from a closed stream — see CLAUDE.md.
+                    mp.setDataSource(out.absolutePath)
+                    mp.setOnCompletionListener {
+                        if (state.chatPhase == com.r1.launcher.ChatPhase.SPEAKING) state.chatResetPhase()
+                    }
+                    mp.prepare()
+                    mp.start()
+                }.onFailure {
+                    toast("speech playback failed")
+                    if (state.chatPhase == com.r1.launcher.ChatPhase.SPEAKING) state.chatResetPhase()
+                }
+            }
+        }
+    }
+
+    private fun cancelChatSpeech() {
+        runCatching { chatTtsCall?.cancel() }
+        chatTtsCall = null
+        runCatching { chatTtsPlayer?.stop() }
+        runCatching { chatTtsPlayer?.release() }
+        chatTtsPlayer = null
+        if (state.chatPhase == com.r1.launcher.ChatPhase.SPEAKING) state.chatResetPhase()
+    }
+
+    // ---- settings rows ----
+
+    override fun chatSettingsActivate(idx: Int) {
+        // 99 is the overlay's "commit the open field" sentinel.
+        if (idx == com.r1.launcher.ui.SAVE_ROW) {
+            val v = state.chatEditInput.trim()
+            when (state.chatEditField) {
+                "model" -> {
+                    val m = v.ifBlank {
+                        com.r1.launcher.chat.Provider.byId(state.chatProviderId).defaultModel
+                    }
+                    chatPrefs.model = m
+                    state.chatModel = m
+                    toastSuccess("model: $m")
+                }
+                "system" -> {
+                    chatPrefs.systemPrompt = v
+                    state.chatSystemPrompt = v
+                    toastSuccess("prompt saved")
+                }
+            }
+            state.chatEditField = ""
+            state.chatEditInput = ""
+            return
+        }
+        when (idx) {
+            0 -> { state.back(); backTone() }
+            1 -> {
+                // Cycle only through providers that actually have a client.
+                val avail = com.r1.launcher.chat.Provider.entries.filter { it.available }
+                val cur = com.r1.launcher.chat.Provider.byId(state.chatProviderId)
+                val next = avail[(avail.indexOf(cur).coerceAtLeast(0) + 1) % avail.size]
+                chatPrefs.provider = next
+                chatPrefs.model = next.defaultModel
+                state.chatProviderId = next.id
+                state.chatModel = next.defaultModel
+                if (avail.size == 1) toast("only openai is wired up so far")
+                selectTone()
+            }
+            2 -> {
+                state.chatEditField = "model"
+                state.chatEditInput = state.chatModel
+            }
+            3 -> chatToggleSpeak()
+            4 -> {
+                chatPrefs.voiceAutoSend = !chatPrefs.voiceAutoSend
+                state.chatVoiceAutoSend = chatPrefs.voiceAutoSend
+                popTone()
+            }
+            5 -> {
+                state.chatEditField = "system"
+                state.chatEditInput = state.chatSystemPrompt
+            }
+            6 -> {
+                chatPrefs.resetSystemPrompt()
+                state.chatSystemPrompt = chatPrefs.systemPrompt
+                toast("prompt reset")
+            }
+            7 -> {
+                val next = when (state.chatTextSize) {
+                    14 -> 16; 16 -> 18; 18 -> 20; 20 -> 14; else -> 16
+                }
+                chatPrefs.fontSize = next
+                state.chatTextSize = next
+                popTone()
+            }
+            8 -> {
+                com.r1.launcher.chat.ChatStore.deleteAll(this)
+                reloadChatHistory()
+                state.chatMsgs.clear()
+                state.chatId = ""
+                toast("all chats deleted")
+            }
+        }
     }
 
     // ==================== Camera app ====================

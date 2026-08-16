@@ -444,6 +444,35 @@ fun LauncherRoot(
             onBack = { state.back(); host.backTone() },
         )
 
+        ChatListPanel(
+            state = state,
+            onBack = { state.back(); host.backTone() },
+            onNew = { host.chatNew() },
+            onOpen = { id -> host.chatOpen(id) },
+            onDelete = { id -> host.chatDelete(id) },
+        )
+
+        ChatPanel(
+            state = state,
+            onBack = { state.back(); host.backTone() },
+            onSend = { host.chatSend() },
+            onStop = { host.chatStop() },
+            onRetry = { host.chatRetry() },
+            onSettings = { state.openChatSettings(); host.selectTone() },
+            onToggleKb = { state.chatKbVisible = !state.chatKbVisible; host.popTone() },
+            onKeyPress = { s2 -> state.chatInput += s2 },
+            onBackspace = { if (state.chatInput.isNotEmpty()) state.chatInput = state.chatInput.dropLast(1) },
+            onToggleImageMode = { host.chatToggleImageMode() },
+            onAttach = { host.chatAttachNewestPhoto() },
+            onClearAttachment = { state.chatAttachment = null },
+            onSpeakToggle = { host.chatToggleSpeak() },
+        )
+
+        ChatSettingsPanel(
+            state = state,
+            onRowClick = { idx -> host.chatSettingsActivate(idx) },
+        )
+
         CameraPanel(
             state = state,
             onBack = { state.back(); host.backTone() },

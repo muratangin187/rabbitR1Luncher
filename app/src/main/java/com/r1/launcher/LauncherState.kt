@@ -22,9 +22,28 @@ import com.r1.launcher.transcriber.TranscriberDetailAction
 import com.r1.launcher.translator.ProviderId
 import com.r1.launcher.translator.TranslationMessage
 
-enum class Panel { HOME, ONBOARDING, APPS, SETTINGS, SETTINGS_DISPLAY, SETTINGS_SOUND, SETTINGS_DEVICE, SETTINGS_ABOUT, SETTINGS_VOICE, SETTINGS_VOICE_TUNING, SETTINGS_VOICE_SUBSCRIPTION, SETTINGS_LANGUAGE, SETTINGS_CREDENTIALS, NETWORK, WIFI_SCAN, WIFI_PASSWORD, WIFI_SHARE, WIFI_SHARE_EDIT, REMOTE_PANEL, PANEL_PASSCODE, NTFY_CONFIG, BT_SCAN, BRIGHTNESS, VOLUME, UI_VOLUME, FACTORY_CONFIRM, OPENCLAW_QR, OPENCLAW_CHAT, OPENCLAW_CAMERA, OPENCLAW_SETTINGS, OPENCLAW_SESSIONS, MESSAGES, MESSAGES_THREAD, TERMINAL, HERMES_CHAT, HERMES_CONFIG, HERMES_QR, HERMES_CONNECTION_EDIT, TRANSLATOR_ONBOARDING, TRANSLATOR, TRANSLATOR_SETTINGS, TRANSCRIBER_LIST, TRANSCRIBER_RECORDING, TRANSCRIBER_DETAIL, TRANSCRIBER_SETTINGS, NOTIFICATIONS, TESTING, CAMERA, GALLERY, GALLERY_VIEW }
+enum class Panel { HOME, ONBOARDING, APPS, SETTINGS, SETTINGS_DISPLAY, SETTINGS_SOUND, SETTINGS_DEVICE, SETTINGS_ABOUT, SETTINGS_VOICE, SETTINGS_VOICE_TUNING, SETTINGS_VOICE_SUBSCRIPTION, SETTINGS_LANGUAGE, SETTINGS_CREDENTIALS, NETWORK, WIFI_SCAN, WIFI_PASSWORD, WIFI_SHARE, WIFI_SHARE_EDIT, REMOTE_PANEL, PANEL_PASSCODE, NTFY_CONFIG, BT_SCAN, BRIGHTNESS, VOLUME, UI_VOLUME, FACTORY_CONFIRM, OPENCLAW_QR, OPENCLAW_CHAT, OPENCLAW_CAMERA, OPENCLAW_SETTINGS, OPENCLAW_SESSIONS, MESSAGES, MESSAGES_THREAD, TERMINAL, HERMES_CHAT, HERMES_CONFIG, HERMES_QR, HERMES_CONNECTION_EDIT, TRANSLATOR_ONBOARDING, TRANSLATOR, TRANSLATOR_SETTINGS, TRANSCRIBER_LIST, TRANSCRIBER_RECORDING, TRANSCRIBER_DETAIL, TRANSCRIBER_SETTINGS, NOTIFICATIONS, TESTING, CAMERA, GALLERY, GALLERY_VIEW, CHAT_LIST, CHAT, CHAT_SETTINGS }
 
 enum class WifiShareEditTarget { SSID, PASSWORD }
+
+/** What the chat app is doing right now. Every one of these is surfaced in the
+ *  composer so a wait is never silent. */
+enum class ChatPhase {
+    IDLE,
+    /** Mic open, side button held. */
+    RECORDING,
+    /** Audio uploaded, waiting on the transcript. */
+    TRANSCRIBING,
+    /** Request sent, no tokens back yet — the longest silent stretch. */
+    WAITING,
+    /** Tokens arriving. */
+    STREAMING,
+    /** Image generation in flight (tens of seconds). */
+    IMAGING,
+    /** Text-to-speech being fetched / played. */
+    SPEAKING,
+    ERROR,
+}
 
 /**
  * Lifecycle of one voice-driven AI image edit. The user is told which of these
@@ -854,6 +873,81 @@ class LauncherState {
         panel = Panel.HERMES_QR
     }
 
+    // --- chat app ---
+    /** Conversation list, newest first. */
+    val chatHistory = mutableStateListOf<com.r1.launcher.chat.ChatStore.Header>()
+    var chatListFocus by mutableIntStateOf(0)
+
+    /** Turns of the open conversation. */
+    val chatMsgs = mutableStateListOf<com.r1.launcher.chat.ChatMsg>()
+    var chatId by mutableStateOf("")
+    var chatTitle by mutableStateOf("new chat")
+    var chatModel by mutableStateOf("")
+    var chatInput by mutableStateOf("")
+    var chatKbVisible by mutableStateOf(false)
+    /** Bumped to pin the transcript list to the newest turn. */
+    var chatScrollTick by mutableIntStateOf(0)
+    /** Set when the user scrolls up; suppresses autoscroll until they return. */
+    var chatPinnedToBottom by mutableStateOf(true)
+
+    var chatPhase by mutableStateOf(ChatPhase.IDLE)
+    var chatError by mutableStateOf("")
+    /** Live text of the in-flight assistant turn. */
+    var chatStreaming by mutableStateOf("")
+    /** Live partial transcript while the side button is held. */
+    var chatPartial by mutableStateOf("")
+    var chatMicLevel by mutableIntStateOf(0)
+    var chatPhaseStartedAt by mutableStateOf(0L)
+    /** Photo attached to the next message (path), shown as a chip in the composer. */
+    var chatAttachment by mutableStateOf<String?>(null)
+    /** Next send generates an image instead of chatting. */
+    var chatImageMode by mutableStateOf(false)
+
+    // chat settings mirrors
+    var chatSpeak by mutableStateOf(false)
+    var chatVoiceAutoSend by mutableStateOf(true)
+    var chatSystemPrompt by mutableStateOf("")
+    var chatTextSize by mutableIntStateOf(16)
+    /** Which chat-settings text field the keyboard overlay is editing
+     *  ("" = closed). Deliberately NOT reusing credentialsEditField: that
+     *  overlay is rendered inside SettingsCredentialsPanel, so setting it from
+     *  here armed a field with no keyboard anywhere on screen. */
+    var chatEditField by mutableStateOf("")
+    var chatEditInput by mutableStateOf("")
+    /** Bumped by the wheel; [chatScrollDir] carries the direction. The
+     *  transcript scrolls by a fixed nudge rather than jumping to an index —
+     *  a long reply is many screens tall and index jumps skip most of it. */
+    var chatScrollSeq by mutableIntStateOf(0)
+    var chatScrollDir by mutableIntStateOf(0)
+    var chatSettingsFocus by mutableIntStateOf(0)
+    var chatProviderId by mutableStateOf("openai")
+
+    val chatWorking: Boolean
+        get() = chatPhase == ChatPhase.WAITING || chatPhase == ChatPhase.STREAMING ||
+            chatPhase == ChatPhase.IMAGING || chatPhase == ChatPhase.TRANSCRIBING
+
+    fun openChatList() {
+        chatListFocus = 0
+        panel = Panel.CHAT_LIST
+    }
+
+    fun openChat() {
+        chatPinnedToBottom = true
+        chatScrollTick++
+        panel = Panel.CHAT
+    }
+
+    fun openChatSettings() {
+        chatSettingsFocus = 0
+        panel = Panel.CHAT_SETTINGS
+    }
+
+    fun chatResetPhase() {
+        chatPhase = ChatPhase.IDLE
+        chatError = ""
+        chatMicLevel = 0
+    }
+
     // --- camera app ---
     /** Motor angle the lens is held at while the camera panel is open.
      *  MOTOR_FACE (0) = pointing at the user, MOTOR_BACK (180) = at the scene.
@@ -1054,6 +1148,9 @@ class LauncherState {
             Panel.NOTIFICATIONS -> Panel.HOME
             Panel.TESTING -> Panel.APPS
             Panel.CAMERA -> Panel.APPS
+            Panel.CHAT_LIST -> Panel.APPS
+            Panel.CHAT -> Panel.CHAT_LIST
+            Panel.CHAT_SETTINGS -> Panel.CHAT
             Panel.GALLERY -> Panel.CAMERA
             Panel.GALLERY_VIEW -> Panel.GALLERY
             Panel.HOME -> Panel.HOME

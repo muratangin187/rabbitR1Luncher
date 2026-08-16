@@ -113,6 +113,32 @@ object OpenAiClient {
         }
     }
 
+    /**
+     * Text -> new image. Same model and quality trade-off as [editImage]; the
+     * chat app uses this for "draw me ..." turns.
+     */
+    fun generateImage(apiKey: String, prompt: String): Result<ByteArray> {
+        if (prompt.isBlank()) return Result.Err("empty prompt")
+        val payload = JSONObject()
+            .put("model", MODEL_IMAGE)
+            .put("prompt", prompt)
+            .put("size", "1024x1024")
+            .put("quality", "low")
+            .put("n", 1)
+            .toString()
+        val req = Request.Builder()
+            .url("https://api.openai.com/v1/images/generations")
+            .addHeader("Authorization", "Bearer $apiKey")
+            .post(payload.toRequestBody("application/json".toMediaType()))
+            .build()
+        return execute(req) { json ->
+            val b64 = json.optJSONArray("data")?.optJSONObject(0)?.optString("b64_json").orEmpty()
+            if (b64.isEmpty()) Result.Err("no image returned")
+            else runCatching { Base64.decode(b64, Base64.DEFAULT) }
+                .fold({ Result.Ok(it) }, { Result.Err("bad image data") })
+        }
+    }
+
     private fun <T> execute(req: Request, parse: (JSONObject) -> Result<T>): Result<T> = try {
         client.newCall(req).execute().use { resp ->
             val raw = resp.body?.string().orEmpty()

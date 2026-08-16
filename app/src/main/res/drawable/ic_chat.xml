@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pixel-art speech bubble: 12x12 logical grid, each pixel = 2x2 viewport units.
+  Same idiom as ic_terminal / ic_camera / ic_trash — solid white with black
+  cut-outs and a hard-stepped tail, no curves, legible at 24dp.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- bubble body -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M2,3 h20 v14 h-20 z" />
+    <!-- stepped tail, bottom-left -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4,17 h6 v2 h-6 z
+                          M4,19 h4 v2 h-4 z" />
+    <!-- three dots cut out -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M6,9 h2 v2 h-2 z
+                          M11,9 h2 v2 h-2 z
+                          M16,9 h2 v2 h-2 z" />
+</vector>

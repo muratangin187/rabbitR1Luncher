@@ -291,6 +291,7 @@ private fun AppCard(
         AppEntry.Translator -> "_r1_translator"
         AppEntry.Testing -> "_r1_testing"
         AppEntry.Camera -> "_r1_camera"
+        AppEntry.Chat -> "_r1_chat"
     }
     // Only the matching synthetic resource is resolved — previous code called
     // painterResource() + stringResource() six times per card (one per
@@ -306,6 +307,7 @@ private fun AppCard(
         AppEntry.Translator -> painterResource(R.drawable.ic_language)
         AppEntry.Testing -> painterResource(R.drawable.ic_thinking)
         AppEntry.Camera -> painterResource(R.drawable.ic_camera)
+        AppEntry.Chat -> painterResource(R.drawable.ic_chat)
     }
 
     var iconPainter by remember(pkg) {
@@ -323,6 +325,7 @@ private fun AppCard(
         AppEntry.Translator -> stringResource(R.string.app_label_translator)
         AppEntry.Testing -> stringResource(R.string.app_label_testing)
         AppEntry.Camera -> stringResource(R.string.app_label_camera)
+        AppEntry.Chat -> stringResource(R.string.app_label_chat)
     }
     var label by remember(pkg, syntheticLabel) {
         mutableStateOf(
@@ -459,6 +462,7 @@ private fun cardBackground(entry: AppEntry, idx: Int): Color = when (entry) {
     AppEntry.Translator -> AppThemes.Translator
     AppEntry.Testing -> AppThemes.Testing
     AppEntry.Camera -> AppThemes.Camera
+    AppEntry.Chat -> AppThemes.Chat
 }
 
 private fun appKey(entry: AppEntry): String = when (entry) {
@@ -472,6 +476,7 @@ private fun appKey(entry: AppEntry): String = when (entry) {
     AppEntry.Translator -> "translator/translator"
     AppEntry.Testing -> "testing/testing"
     AppEntry.Camera -> "camera/camera"
+    AppEntry.Chat -> "chat/chat"
 }
 
 private fun appContentType(entry: AppEntry): String = when (entry) {
@@ -485,6 +490,7 @@ private fun appContentType(entry: AppEntry): String = when (entry) {
     AppEntry.Translator -> "translator"
     AppEntry.Testing -> "testing"
     AppEntry.Camera -> "camera"
+    AppEntry.Chat -> "chat"
 }
 
 class FolderShape : androidx.compose.ui.graphics.Shape {

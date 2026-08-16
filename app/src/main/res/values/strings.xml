@@ -253,4 +253,5 @@
     <string name="home_hotspot_many">%d devices connected</string>
     <string name="app_label_testing">testing</string>
     <string name="app_label_camera">camera</string>
+    <string name="app_label_chat">chat</string>
 </resources>

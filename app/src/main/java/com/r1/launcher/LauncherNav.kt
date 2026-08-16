@@ -35,6 +35,20 @@ interface LauncherHost {
     fun galleryAiRecordStop()
     /** Re-run the last failed job with the same photo + transcript. */
     fun galleryAiRetry()
+
+    // --- chat app ---
+    fun chatNew()
+    fun chatOpen(id: String)
+    fun chatDelete(id: String)
+    fun chatSend()
+    fun chatStop()
+    fun chatRetry()
+    fun chatRecordStart()
+    fun chatRecordStop()
+    fun chatToggleSpeak()
+    fun chatToggleImageMode()
+    fun chatAttachNewestPhoto()
+    fun chatSettingsActivate(idx: Int)
     /** Forwarded from the panel's R1CameraView callback. */
     fun onCameraEvent(event: com.r1.launcher.ui.R1CameraView.Event)
     fun startWifiScan()
@@ -459,6 +473,17 @@ fun LauncherState.wheelUp(host: LauncherHost) {
         }
         // Wheel up/down is the documented way to swap which way the lens
         // points. It's a motor move, not a camera-id switch — see R1CameraView.
+        Panel.CHAT_LIST -> {
+            if (chatListFocus <= 0) { back(); host.backTone() }
+            else { chatListFocus--; host.navTone() }
+        }
+        // Wheel scrolls the transcript; leaving the tail turns off autoscroll
+        // so a long reply doesn't drag the user back down mid-read.
+        Panel.CHAT -> { chatPinnedToBottom = false; chatScrollDir = -1; chatScrollSeq++ }
+        Panel.CHAT_SETTINGS -> {
+            if (chatSettingsFocus <= 0) { back(); host.backTone() }
+            else { chatSettingsFocus--; host.navTone() }
+        }
         Panel.CAMERA -> {
             if (!cameraFacingIsFront) { host.cameraFlip(); host.navTone() }
         }
@@ -753,6 +778,13 @@ fun LauncherState.wheelDown(host: LauncherHost) {
             smsThreadFocus = (smsThreadFocus + 1).coerceAtMost(maxRow)
             if (prev != smsThreadFocus) host.navTone()
         }
+        Panel.CHAT_LIST -> {
+            if (chatListFocus < chatHistory.size + 1) { chatListFocus++; host.navTone() }
+        }
+        Panel.CHAT -> { chatScrollDir = 1; chatScrollSeq++ }
+        Panel.CHAT_SETTINGS -> {
+            if (chatSettingsFocus < 8) { chatSettingsFocus++; host.navTone() }
+        }
         Panel.CAMERA -> {
             if (cameraFacingIsFront) { host.cameraFlip(); host.navTone() }
         }
@@ -1025,6 +1057,13 @@ fun LauncherState.activate(host: LauncherHost) {
         }
         // Wheel press == shutter, so the side button's single-tap (which
         // routes here for every non-HOME panel) takes a photo for free.
+        Panel.CHAT_LIST -> when (chatListFocus) {
+            0 -> { back(); host.backTone() }
+            1 -> host.chatNew()
+            else -> chatHistory.getOrNull(chatListFocus - 2)?.let { host.chatOpen(it.id) }
+        }
+        Panel.CHAT -> if (chatInput.isNotBlank() || chatAttachment != null) host.chatSend()
+        Panel.CHAT_SETTINGS -> host.chatSettingsActivate(chatSettingsFocus)
         Panel.CAMERA -> host.cameraShutter()
         Panel.GALLERY -> {
             if (galleryFocus == 0) { back(); host.backTone() }

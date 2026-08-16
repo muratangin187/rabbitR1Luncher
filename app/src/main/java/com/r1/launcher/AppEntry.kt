@@ -12,6 +12,7 @@ sealed class AppEntry {
     object Meetings : AppEntry()
     object Translator : AppEntry()
     object Camera : AppEntry()
+    object Chat : AppEntry()
     /** Scratch panel for exercising the build/install loop. Safe to delete. */
     object Testing : AppEntry()
 }
