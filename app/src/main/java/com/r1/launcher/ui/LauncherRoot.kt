@@ -485,7 +485,10 @@ fun LauncherRoot(
         GalleryPanel(
             state = state,
             onBack = { state.back(); host.backTone() },
-            onOpen = { idx -> state.openGalleryView(idx); host.selectTone() },
+            onOpen = { idx ->
+                if (state.chatPickingPhoto) host.chatPickPhoto(idx)
+                else { state.openGalleryView(idx); host.selectTone() }
+            },
         )
 
         GalleryViewPanel(

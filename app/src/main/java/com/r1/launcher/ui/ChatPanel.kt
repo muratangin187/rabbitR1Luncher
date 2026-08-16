@@ -141,6 +141,7 @@ fun ChatPanel(
                 onBack = onBack,
                 themeColor = accent,
                 compact = true,
+                subtitle = state.chatModel.ifBlank { null },
                 gearFocused = false,
                 onGear = onSettings,
                 trailingContent = {
@@ -204,7 +205,9 @@ fun ChatPanel(
                     visible = !state.chatPinnedToBottom,
                     enter = fadeIn(tween(150)),
                     exit = fadeOut(tween(150)),
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(10.dp),
+                    // Sits clear of the last bubble's right edge; at 10dp it
+                    // overlapped the text underneath.
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = 16.dp),
                 ) {
                     Box(
                         modifier = Modifier
@@ -343,7 +346,9 @@ private fun Bubble(msg: ChatMsg, accent: Color, fontSize: Int) {
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth(0.94f)
+                // User turns are narrower so the two speakers are told apart by
+                // shape as well as colour — at 480px a tint alone is subtle.
+                .fillMaxWidth(if (isUser) 0.82f else 0.96f)
                 .clip(RoundedCornerShape(10.dp))
                 .background(if (isUser) accent.copy(alpha = 0.16f) else Color(0xFF141414))
                 .padding(horizontal = 10.dp, vertical = 8.dp),

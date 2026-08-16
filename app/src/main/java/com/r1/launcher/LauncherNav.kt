@@ -48,6 +48,7 @@ interface LauncherHost {
     fun chatToggleSpeak()
     fun chatToggleImageMode()
     fun chatAttachNewestPhoto()
+    fun chatPickPhoto(index: Int)
     fun chatSettingsActivate(idx: Int)
     /** Forwarded from the panel's R1CameraView callback. */
     fun onCameraEvent(event: com.r1.launcher.ui.R1CameraView.Event)

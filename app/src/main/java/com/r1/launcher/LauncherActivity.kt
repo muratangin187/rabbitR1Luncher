@@ -6340,14 +6340,24 @@ override fun hermesPasteServerUrlFromClipboard() {
         toast(if (state.chatSpeak) "replies will be spoken" else "speech off")
     }
 
-    /** Attach the newest camera photo. Reuses the Camera app's store so the two
-     *  apps share one library instead of each keeping its own. */
+    /** Open the gallery as a picker. Reuses the Camera app's PhotoStore so the
+     *  two apps share one library rather than each keeping its own. */
     override fun chatAttachNewestPhoto() {
-        val newest = com.r1.launcher.camera.PhotoStore.list(this).firstOrNull()
-        if (newest == null) { toast("no photos yet — take one first"); return }
-        state.chatAttachment = newest.path
+        reloadPhotos()
+        if (state.photos.isEmpty()) { toast("no photos yet — take one first"); return }
+        state.chatPickingPhoto = true
+        selectTone()
+        state.openGallery()
+    }
+
+    /** Gallery tap while picking: attach and go straight back to the chat. */
+    override fun chatPickPhoto(index: Int) {
+        val photo = state.photos.getOrNull(index)
+        state.chatPickingPhoto = false
+        if (photo == null) { state.openChat(); return }
+        state.chatAttachment = photo.path
         popTone()
-        toast("photo attached")
+        state.openChat()
     }
 
     override fun chatSend() {

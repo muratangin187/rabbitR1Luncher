@@ -902,6 +902,9 @@ class LauncherState {
     var chatAttachment by mutableStateOf<String?>(null)
     /** Next send generates an image instead of chatting. */
     var chatImageMode by mutableStateOf(false)
+    /** True while the gallery is open as an attachment picker for the chat.
+     *  Blindly grabbing the newest photo was wrong the moment you had two. */
+    var chatPickingPhoto by mutableStateOf(false)
 
     // chat settings mirrors
     var chatSpeak by mutableStateOf(false)
@@ -1151,7 +1154,7 @@ class LauncherState {
             Panel.CHAT_LIST -> Panel.APPS
             Panel.CHAT -> Panel.CHAT_LIST
             Panel.CHAT_SETTINGS -> Panel.CHAT
-            Panel.GALLERY -> Panel.CAMERA
+            Panel.GALLERY -> if (chatPickingPhoto) Panel.CHAT else Panel.CAMERA
             Panel.GALLERY_VIEW -> Panel.GALLERY
             Panel.HOME -> Panel.HOME
         }
