@@ -78,15 +78,21 @@ The emulator is not a practical option on this machine: `/proc/cpuinfo` reports
 no `vmx` flag, so Intel VT-x is disabled in the BIOS/UEFI and the emulator falls
 back to full CPU emulation. Enable VT-x in firmware if you want that path back,
 then `sdkmanager "emulator" "system-images;android-33;google_apis;x86_64"` and
-an AVD at 480×480 / 320 dpi. Even then the emulator has no carroot socket, no
+an AVD at 480×640 / 320 dpi. Even then the emulator has no carroot socket, no
 side button, no scroll wheel, and no camera motor — so the panels that matter
 most still need hardware.
 
 What actually works, cheapest first:
 
-**Mirror the screen.** `./r1.sh mirror` gives you the round 480×480 panel in a
-desktop window with working touch and keyboard. This is the single biggest
-quality-of-life win for UI work — no more squinting at the device.
+**Mirror the screen.** `./r1.sh mirror` gives you the panel in a desktop window
+with working touch and keyboard. This is the single biggest quality-of-life win
+for UI work — no more squinting at the device.
+
+> **The panel is 480×640, not "480×480 round".** `README.md`, `CLAUDE.md`,
+> `AGENTS.md` and `DEVICE.md` all say 480×480 round; `wm size` and `dumpsys
+> display` on the actual device both report `480 x 640`, and screenshots fill
+> the full height. Assume 480×640 portrait when laying anything out. This bit
+> `./r1.sh rec`, which was forcing `--size 480x480` and squashing recordings.
 
 **Drive the UI without touching it.** The launcher navigates by scroll wheel,
 which maps to D-pad keycodes:

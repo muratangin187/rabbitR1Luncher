@@ -100,7 +100,10 @@ case "${1:-all}" in
     secs="${2:-20}"
     out="shots/rec-$(date +%H%M%S).mp4"
     say "recording ${secs}s -- interact with the device now"
-    "$ADB" shell screenrecord --time-limit "$secs" --size 480x480 /sdcard/r1rec.mp4
+    # No --size: let screenrecord use the native framebuffer. The R1 panel is
+    # 480x640 (`wm size`), not the 480x480 the repo's docs claim -- forcing a
+    # square here squashed the output.
+    "$ADB" shell screenrecord --time-limit "$secs" /sdcard/r1rec.mp4
     "$ADB" pull -a /sdcard/r1rec.mp4 "$out" >/dev/null
     "$ADB" shell rm -f /sdcard/r1rec.mp4
     say "$out"
@@ -109,8 +112,9 @@ case "${1:-all}" in
   mirror)
     need_device
     command -v scrcpy >/dev/null || die "scrcpy not installed (pacman -S scrcpy)"
-    # 480x480 round panel; --stay-awake keeps it from sleeping mid-session.
-    exec scrcpy --window-title "R1" --stay-awake --window-width 480 --window-height 480
+    # Width only, so scrcpy keeps the panel's real 480x640 aspect.
+    # --stay-awake stops it sleeping mid-session.
+    exec scrcpy --window-title "R1" --stay-awake --window-width 480
     ;;
 
   sh)  need_device; shift; exec "$ADB" shell "$@" ;;
