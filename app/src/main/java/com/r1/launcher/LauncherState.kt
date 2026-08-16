@@ -862,6 +862,10 @@ class LauncherState {
     val cameraFacingIsFront: Boolean get() = cameraFacing <= 90
     /** True from shutter press until the JPEG lands — freezes the shutter. */
     var cameraCapturing by mutableStateOf(false)
+    /** True while the lens is being physically rotated. The camera has to be
+     *  released for the motor to actually move, so the preview is down for
+     *  the duration and the UI says so. */
+    var cameraFlipping by mutableStateOf(false)
     /** False until the preview's first repeating request is accepted. */
     var cameraReady by mutableStateOf(false)
     var cameraError by mutableStateOf<String?>(null)

@@ -21,6 +21,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -69,16 +70,32 @@ fun CameraPanel(
         val type = LocalR1Type.current
         var cameraView by remember { mutableStateOf<R1CameraView?>(null) }
 
-        // Hold the lens wherever the user pointed it for the whole session and
-        // park it on the way out. Keyed on cameraFacing so a flip re-issues the
-        // motor write; the panel-level DisposableEffect is the only owner of
-        // motor lifetime (R1CameraView deliberately never touches it).
-        DisposableEffect(state.cameraFacing) {
-            setMotorOrientation(state.cameraFacing)
-            onDispose { }
+        // Cameras 0 and 1 conflict (one sensor), so the outgoing device has to
+        // be fully released before the incoming one opens — otherwise the open
+        // fails with MAX_CAMERAS_IN_USE. `activeFacing` lags `cameraFacing` by
+        // one teardown so the view is only rebuilt once the old one is gone.
+        var activeFacing by remember { mutableStateOf(state.cameraFacing) }
+        LaunchedEffect(state.cameraFacing) {
+            if (activeFacing == state.cameraFacing) return@LaunchedEffect
+            state.cameraFlipping = true
+            state.cameraReady = false
+            cameraView?.stop()
+            delay(500)
+            activeFacing = state.cameraFacing
+            state.cameraFlipping = false
         }
+
+        // Flipping does NOT write the motor. The HAL owns the gimbal: opening
+        // camera 0 rotates the lens to the rear position and camera 1 rotates
+        // it to the front, and it re-asserts that on every session open. A
+        // manual sysfs write with a session live moves the lens and is undone
+        // ~0.5 s later when the HAL re-opens (observed in dmesg as a matching
+        // reverse move). So a flip just rebuilds the view against the other
+        // camera id and lets the HAL do the turning.
         DisposableEffect(Unit) {
-            onDispose { setMotorOrientation(MOTOR_HOME) }
+            // Park the lens on the way out. Safe here: no session is open by
+            // the time the view has been released.
+            onDispose { setMotorOrientation(MOTOR_HOME, chunked = false) }
         }
         // The host owns "when to shoot" (wheel press, side button, on-screen
         // shutter all funnel into cameraShutter()), but only the panel holds
@@ -88,18 +105,22 @@ fun CameraPanel(
         }
 
         Box(Modifier.fillMaxSize().background(Color.Black)) {
+            key(activeFacing) {
             AndroidView(
                 modifier = Modifier
                     .fillMaxSize()
-                    // At FACE the sensor still reports its world-facing
-                    // orientation, so the preview comes through mirrored the
-                    // way a phone's selfie view does. Flipping it back matches
-                    // what people expect from a front camera. This transforms
-                    // only the View's display — the captured JPEG is untouched,
-                    // same as stock front-camera behaviour.
-                    .graphicsLayer(scaleX = if (state.cameraFacingIsFront) -1f else 1f),
+                    // Camera 1 reports SENSOR_ORIENTATION 270 against camera
+                    // 0's 90, so its frames arrive rotated 180 degrees; the
+                    // rotation puts them upright again. The horizontal mirror
+                    // on top is the usual selfie convention. Both are display
+                    // transforms only — the captured JPEG is untouched, which
+                    // matches stock front-camera behaviour.
+                    .graphicsLayer(
+                        rotationZ = if (activeFacing <= 90) 180f else 0f,
+                        scaleX = if (activeFacing <= 90) -1f else 1f,
+                    ),
                 factory = { ctx ->
-                    R1CameraView(ctx) { ev -> onCameraEvent(ev) }
+                    R1CameraView(ctx, wantFront = activeFacing <= 90) { ev -> onCameraEvent(ev) }
                         .also { cameraView = it; it.start() }
                 },
                 onRelease = { view ->
@@ -107,6 +128,7 @@ fun CameraPanel(
                     if (cameraView === view) cameraView = null
                 },
             )
+            }
 
             // Shutter flash. Keyed on a counter rather than a boolean so two
             // captures in a row each get their own flash.
@@ -125,8 +147,8 @@ fun CameraPanel(
             if (!state.cameraReady && state.cameraError == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        "starting camera…",
-                        style = type.appCard.copy(fontSize = 18.sp),
+                        if (state.cameraFlipping) "turning lens…" else "starting camera…",
+                        style = type.appCard.copy(fontSize = 17.sp),
                         color = Color.White.copy(alpha = 0.85f),
                     )
                 }
@@ -175,7 +197,10 @@ fun CameraPanel(
             ) {
                 LastShotThumb(state = state, onClick = onOpenGallery)
 
-                ShutterButton(enabled = state.cameraReady && !state.cameraCapturing, onClick = onShutter)
+                ShutterButton(
+                    enabled = state.cameraReady && !state.cameraCapturing && !state.cameraFlipping,
+                    onClick = onShutter,
+                )
 
                 Box(
                     modifier = Modifier

@@ -26,15 +26,20 @@ import androidx.core.content.ContextCompat
  * entangled with that panel's capture/retake lifecycle. This one is owned by
  * the Camera app and free to change.
  *
- * There is only ever ONE camera device to open. The R1's "front / back" is a
- * single sensor on a stepper-motor gimbal — flipping is a motor write (see
- * [setMotorOrientation]), not a camera-id switch. Camera2 reports a second
- * `LENS_FACING_FRONT` device but it is a stale entry inherited from the stock
- * MediaTek HAL and does not produce frames, so [selectCamera] deliberately
- * pins the BACK device.
+ * The R1 has ONE physical sensor on a stepper-motor gimbal, but the HAL
+ * exposes it as two logical cameras (0 = BACK, 1 = FRONT) and rotates the
+ * gimbal itself when a session opens. Writing the motor sysfs directly while a
+ * session is open is therefore pointless — verified on device: the write moves
+ * the lens, and ~0.5 s later the HAL yanks it straight back to its own idea of
+ * the position. Opening the matching camera id is what actually turns the lens
+ * and keeps it turned.
  */
 class R1CameraView(
     context: Context,
+    /** Which logical camera to open. The HAL advertises two devices over the
+     *  one physical sensor and rotates the gimbal itself when the session
+     *  opens, so this is what actually turns the lens. */
+    private val wantFront: Boolean = false,
     private val onEvent: (Event) -> Unit,
 ) : TextureView(context) {
 
@@ -67,6 +72,7 @@ class R1CameraView(
      * stuck on a solid fill colour, never showing real frames.
      */
     @Volatile private var opening = false
+    private var retries = 0
 
     private val textureListener = object : SurfaceTextureListener {
         override fun onSurfaceTextureAvailable(s: SurfaceTexture, w: Int, h: Int) = openCamera()
@@ -77,6 +83,7 @@ class R1CameraView(
 
     fun start() {
         stopped = false
+        retries = 0
         if (thread == null) {
             thread = HandlerThread("r1-camera").also { it.start() }
             handler = Handler(thread!!.looper)
@@ -162,9 +169,19 @@ class R1CameraView(
                 override fun onError(dev: CameraDevice, error: Int) {
                     opening = false
                     dev.close(); camera = null
-                    // CAMERA_IN_USE (1) is the one users actually hit — the
-                    // OpenClaw QR panel holds the device if it didn't dispose.
-                    onEvent(Event.Failed(if (error == ERROR_CAMERA_IN_USE) "camera busy" else "camera error $error"))
+                    // Cameras 0 and 1 are the same physical sensor and the HAL
+                    // lists them as conflicting, so a front/back swap races the
+                    // previous device's close and lands on IN_USE (1) or
+                    // MAX_CAMERAS_IN_USE (2). Both clear on their own within a
+                    // few hundred ms, so retry once before telling the user.
+                    val transient = error == ERROR_CAMERA_IN_USE || error == ERROR_MAX_CAMERAS_IN_USE
+                    if (transient && retries < MAX_RETRIES && !stopped) {
+                        retries++
+                        Log.i("R1CameraView", "camera error $error, retry $retries")
+                        handler?.postDelayed({ if (!stopped) openCamera() }, RETRY_DELAY_MS)
+                        return
+                    }
+                    onEvent(Event.Failed(if (transient) "camera busy" else "camera error $error"))
                 }
             }, handler)
         }.onFailure {
@@ -222,18 +239,19 @@ class R1CameraView(
 
     private fun selectCamera(): String? {
         val ids = runCatching { manager.cameraIdList }.getOrNull() ?: return null
-        val back = ids.firstOrNull { id ->
+        val want = if (wantFront) CameraCharacteristics.LENS_FACING_FRONT
+                   else CameraCharacteristics.LENS_FACING_BACK
+        val match = ids.firstOrNull { id ->
             runCatching {
-                manager.getCameraCharacteristics(id)
-                    .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+                manager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) == want
             }.getOrDefault(false)
         }
-        val selected = back ?: ids.firstOrNull()
+        val selected = match ?: ids.firstOrNull()
         if (selected != null) {
             sensorOrientation = runCatching {
                 manager.getCameraCharacteristics(selected).get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
             }.getOrDefault(0)
-            Log.i("R1CameraView", "using camera $selected sensorOrientation=$sensorOrientation")
+            Log.i("R1CameraView", "using camera $selected (wantFront=$wantFront) sensorOrientation=$sensorOrientation")
         }
         return selected
     }
@@ -242,6 +260,8 @@ class R1CameraView(
         // The MT6765 HAL advertises larger JPEG sizes but 640x480 is what the
         // OpenClaw panel has shipped with, and it keeps captures small enough
         // to upload over the R1's Wi-Fi without a visible stall.
+        const val MAX_RETRIES = 4
+        const val RETRY_DELAY_MS = 350L
         const val PREVIEW_W = 640
         const val PREVIEW_H = 480
     }

@@ -49,14 +49,39 @@ private val motorExecutor = Executors.newSingleThreadExecutor { r ->
 private const val CHUNK_MAX_DEG = 45
 private const val CHUNK_SETTLE_MS = 80L
 
-fun setMotorOrientation(value: Int) {
-    Log.i("R1Motor", "setMotorOrientation($value) queued")
+/**
+ * [chunked] = false writes the target in one go instead of walking it in 45°
+ * hops. The hops exist because the stepper was reported to miss steps on a
+ * long traverse, but a single write is what the OEM's own Quick Settings tile
+ * does and it is what verifiably moves the lens on this device.
+ *
+ * [onDone] fires on the motor thread once every write has been issued — the
+ * caller needs it to know when it is safe to re-open the camera.
+ *
+ * NOTE: the lens only physically moves while the camera is NOT streaming.
+ * Writes issued with a capture session open are accepted by the driver (it
+ * logs `run` / `step:` / `done` exactly as normal) but the lens stays put.
+ * Callers that want real movement must stop the camera first — see
+ * CameraPanel's flip sequence.
+ */
+fun setMotorOrientation(value: Int, chunked: Boolean = true, onDone: (() -> Unit)? = null) {
+    Log.i("R1Motor", "setMotorOrientation($value, chunked=$chunked) queued")
     motorExecutor.execute {
+        if (!chunked) {
+            val clamped = value.coerceIn(MOTOR_FACE, MOTOR_BACK)
+            if (clamped != lastTarget) {
+                writeOrientation(clamped)
+                lastTarget = clamped
+            }
+            onDone?.invoke()
+            return@execute
+        }
         val clamped = value.coerceIn(MOTOR_FACE, MOTOR_BACK)
         val start = lastTarget
         val total = clamped - start
         if (total == 0) {
             Log.i("R1Motor", "setMotorOrientation($clamped) no-op (already at target)")
+            onDone?.invoke()
             return@execute
         }
         // Build the staircase of intermediate angles ending at clamped.
@@ -79,6 +104,7 @@ fun setMotorOrientation(value: Int) {
             }
             lastTarget = target
         }
+        onDone?.invoke()
     }
 }
 
