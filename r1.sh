@@ -143,7 +143,12 @@ case "${1:-all}" in
   root)
     need_device; shift
     [ $# -gt 0 ] || die "usage: ./r1.sh root <command>"
-    "$ADB" shell "echo '$*' | toybox nc 127.0.0.1 1337"
+    # The command crosses three shells (host -> adb -> carroot), so anything
+    # with quotes, pipes or redirects used to arrive mangled -- a grep pattern
+    # like 'a|b' silently became two broken commands. Base64 the payload and
+    # decode it on the far side so it survives all three intact.
+    payload=$(printf '%s' "$*" | base64 -w0)
+    "$ADB" shell "echo 'echo $payload | base64 -d | sh' | toybox nc 127.0.0.1 1337"
     ;;
 
   keys)

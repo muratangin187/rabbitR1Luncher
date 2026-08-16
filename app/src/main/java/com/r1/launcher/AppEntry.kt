@@ -11,6 +11,7 @@ sealed class AppEntry {
     object Hermes : AppEntry()
     object Meetings : AppEntry()
     object Translator : AppEntry()
+    object Camera : AppEntry()
     /** Scratch panel for exercising the build/install loop. Safe to delete. */
     object Testing : AppEntry()
 }

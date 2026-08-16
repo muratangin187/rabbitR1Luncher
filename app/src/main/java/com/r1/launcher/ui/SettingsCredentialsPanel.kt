@@ -55,9 +55,10 @@ import com.r1.launcher.R
  *   0  < back
  *   1  elevenlabs       (status + masked tail; click → keyboard)
  *   2  hermes           (status + masked tail; click → keyboard)
- *   3  ntfy topic       (status + plain text; click → keyboard)
- *   4  webhook          (read-only display + click = regenerate, no keyboard)
- *   5  control secret   (read-only display + click = regenerate, no keyboard)
+ *   3  openai           (status + masked tail; click → keyboard)
+ *   4  ntfy topic       (status + plain text; click → keyboard)
+ *   5  webhook          (read-only display + click = regenerate, no keyboard)
+ *   6  control secret   (read-only display + click = regenerate, no keyboard)
  */
 @Composable
 fun SettingsCredentialsPanel(
@@ -79,6 +80,7 @@ fun SettingsCredentialsPanel(
             CredentialsItem("__header__", "", false, ""),
             CredentialsItem("elevenlabs", "voice tts + stt", state.hasVoiceKey, state.voiceKeyTail),
             CredentialsItem("hermes", "hermes agent bearer", state.hasHermesKey, state.hermesKeyTail),
+            CredentialsItem("openai", "camera transcribe + image edit", state.hasOpenAiKey, state.openAiKeyTail),
             CredentialsItem("ntfy.sh topic", "outbound notifications", state.ntfyTopic.isNotBlank(),
                 state.ntfyTopic.takeLast(12)),
             CredentialsItem("webhook token", "tap to regenerate", true,

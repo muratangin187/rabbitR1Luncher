@@ -444,6 +444,29 @@ fun LauncherRoot(
             onBack = { state.back(); host.backTone() },
         )
 
+        CameraPanel(
+            state = state,
+            onBack = { state.back(); host.backTone() },
+            onShutter = { host.cameraShutter() },
+            onFlip = { host.cameraFlip(); host.popTone() },
+            onOpenGallery = { host.cameraOpenGallery() },
+            onCameraEvent = { ev -> host.onCameraEvent(ev) },
+        )
+
+        GalleryPanel(
+            state = state,
+            onBack = { state.back(); host.backTone() },
+            onOpen = { idx -> state.openGalleryView(idx); host.selectTone() },
+        )
+
+        GalleryViewPanel(
+            state = state,
+            onBack = { state.back(); host.backTone() },
+            onDelete = { host.galleryDeleteCurrent() },
+            onRetry = { host.galleryAiRetry() },
+            onDismissStatus = { state.aiReset() },
+        )
+
         TestingPanel(
             state = state,
             onBack = { state.back(); host.backTone() },

@@ -370,6 +370,7 @@ object AppThemes {
     val Meetings = Color(0xFF00FF38)   // lime green
     val Settings = Color(0xFFFFD600)   // sunshine yellow
     val Hermes = Color(0xFFFFB300)     // warm amber
+    val Camera = Color(0xFF00C2FF)     // electric blue — the camera/gallery family
     val Testing = Color(0xFF9B5DE5)    // violet — unused elsewhere in the palette
     val Translator = Color(0xFF14B8A6) // teal — distinct from Hermes amber & OpenClaw pink
 }

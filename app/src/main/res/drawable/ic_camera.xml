@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pixel-art camera icon: 12x12 logical grid, each pixel = 2x2 viewport units.
+  Matches ic_terminal's idiom — solid white body with black "windows" cut out,
+  no anti-aliased curves, so it stays crisp at the 24dp the apps grid draws it.
+
+  Body spans y=6..20 with a viewfinder hump at y=4, and the lens is a stepped
+  black ring with a white catchlight in the middle.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- viewfinder hump + shutter nub -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M6,4 h4 v2 h-4 z
+                          M16,4 h4 v2 h-4 z" />
+    <!-- body -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M2,6 h20 v14 h-20 z" />
+    <!-- lens: stepped black ring -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M10,8 h4 v2 h-4 z
+                          M8,10 h8 v4 h-8 z
+                          M10,14 h4 v2 h-4 z" />
+    <!-- catchlight -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M11,11 h2 v2 h-2 z" />
+</vector>

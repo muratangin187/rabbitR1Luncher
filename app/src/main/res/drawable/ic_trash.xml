@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pixel-art trash can: 12x12 logical grid, each pixel = 2x2 viewport units.
+  Same idiom as ic_terminal / ic_camera — solid white with black cut-outs, no
+  curves, so it stays legible at the 22dp the gallery overlay draws it.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- handle + lid -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M9,2 h6 v2 h-6 z
+                          M3,4 h18 v2 h-18 z" />
+    <!-- body -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M5,7 h14 v15 h-14 z" />
+    <!-- three slots cut out of the body -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M8,10 h2 v9 h-2 z
+                          M11,10 h2 v9 h-2 z
+                          M14,10 h2 v9 h-2 z" />
+</vector>

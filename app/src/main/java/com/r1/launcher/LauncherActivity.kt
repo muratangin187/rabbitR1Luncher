@@ -117,6 +117,7 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
     private val hermesPrefs by lazy { com.r1.launcher.hermes.HermesPrefs.get(this) }
     private val hermesClient by lazy { com.r1.launcher.hermes.HermesClient() }
     private val translatorPrefs by lazy { com.r1.launcher.translator.TranslatorPrefs.get(this) }
+    private val cameraPrefs by lazy { com.r1.launcher.camera.CameraPrefs(this) }
     private val translatorClient by lazy { com.r1.launcher.translator.TranslatorClient() }
     /** In-flight Translator TTS HTTP call — cancellable when a new translation
      *  arrives or the user starts a new mic capture. */
@@ -363,6 +364,28 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
                     voicePrefs.elevenlabsKey = k
                     refreshVoiceKeyState()
                     toastSuccess("voice key saved")
+                }
+            }
+        }
+    }
+
+    // adb-installable OpenAI key receiver (camera app: transcription + image edit):
+    //   adb shell "am broadcast -a com.r1.launcher.SET_OPENAI_KEY \
+    //     --es secret <controlSecret> --es key sk-proj-..."
+    // Same rationale as the ElevenLabs receiver above — an OpenAI project key
+    // is ~160 characters, which is not something anyone is going to enter on
+    // the RetroKeyboard. Gated on the control secret.
+    private val openAiKeyRx = object : BroadcastReceiver() {
+        override fun onReceive(c: Context, i: Intent?) {
+            if (!controlSecretOk(i)) return
+            val k = i?.getStringExtra("key")?.trim().orEmpty()
+            when {
+                k.isEmpty() -> toastFail("--es key missing")
+                !com.r1.launcher.camera.CameraPrefs.looksValid(k) -> toastFail("not an openai key")
+                else -> {
+                    cameraPrefs.openAiKey = k
+                    refreshCredentialsDisplay()
+                    toastSuccess("openai key saved")
                 }
             }
         }
@@ -843,6 +866,7 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
                 state.apps.add(AppEntry.Hermes)
                 state.apps.add(AppEntry.Translator)
                 state.apps.add(AppEntry.Meetings)
+                state.apps.add(AppEntry.Camera)
                 state.apps.add(AppEntry.Testing)
                 state.apps.add(AppEntry.Settings)
                 state.appsLoaded = true
@@ -908,6 +932,13 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
             registerReceiver(voiceKeyRx, keyFilter)
         }
 
+        val openAiFilter = IntentFilter("com.r1.launcher.SET_OPENAI_KEY")
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(openAiKeyRx, openAiFilter, Context.RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(openAiKeyRx, openAiFilter)
+        }
+
         val hermesCfgFilter = IntentFilter("com.r1.launcher.SET_HERMES_CONFIG")
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(hermesConfigRx, hermesCfgFilter, Context.RECEIVER_EXPORTED)
@@ -962,6 +993,7 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
         }
         runCatching { unregisterReceiver(packageRx) }
         runCatching { unregisterReceiver(voiceKeyRx) }
+        runCatching { unregisterReceiver(openAiKeyRx) }
         runCatching { unregisterReceiver(hermesConfigRx) }
         runCatching { unregisterReceiver(smsLocalRx) }
         runCatching { unregisterReceiver(webToggleRx) }
@@ -1206,6 +1238,12 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
             AppEntry.Meetings -> {
                 selectTone()
                 transcriberOpen()
+            }
+            AppEntry.Camera -> {
+                selectTone()
+                if (!ensureCameraPerm()) return
+                reloadPhotos()
+                state.openCamera()
             }
             AppEntry.Testing -> {
                 selectTone()
@@ -5312,6 +5350,10 @@ override fun hermesPasteServerUrlFromClipboard() {
                             // PTT translation. Commit auto-submits to the LLM
                             // (see VoiceSink.TRANSLATOR branch in handleCommittedTranscript).
                             translatorRecordStart()
+                        } else if (state.panel == Panel.GALLERY_VIEW) {
+                            // Hold-to-talk for the AI image edit. Release is
+                            // mirrored in the sideLongFired branch on UP.
+                            galleryAiRecordStart()
                         }
                     }
                 }
@@ -5322,6 +5364,7 @@ override fun hermesPasteServerUrlFromClipboard() {
                         // recording stops when the user releases.
                         if (state.panel == Panel.TERMINAL) terminalRecordStop()
                         else if (state.panel == Panel.TRANSLATOR) translatorRecordStop()
+                        else if (state.panel == Panel.GALLERY_VIEW) galleryAiRecordStop()
                         sideLongFired = false
                         return true
                     }
@@ -6122,6 +6165,9 @@ override fun hermesPasteServerUrlFromClipboard() {
         val hk = hermesPrefs.active?.apiKey.orEmpty()
         state.hasHermesKey = hk.isNotBlank()
         state.hermesKeyTail = if (hk.isNotBlank()) hk.takeLast(4) else ""
+        // OpenAI key (camera app: transcription + image edit)
+        state.hasOpenAiKey = cameraPrefs.hasKey()
+        state.openAiKeyTail = cameraPrefs.keyTail()
         // Webhook token — always visible (gen-on-read), no "set" gate.
         state.webhookTokenDisplay = notifPrefs.webhookToken.takeLast(8)
         // Control secret — shown in full (8 chars) so it can be copied into adb
@@ -6145,22 +6191,278 @@ override fun hermesPasteServerUrlFromClipboard() {
         }.getOrDefault("")
     }
 
+    // ==================== Camera app ====================
+    //
+    // Flow:  CAMERA (preview) -> shutter -> PhotoStore -> GALLERY -> GALLERY_VIEW
+    //        GALLERY_VIEW + side-button hold -> mic -> OpenAI transcribe ->
+    //        OpenAI image edit -> new photo in the gallery.
+    //
+    // Every network hop runs on `cameraJobs` and reports back through
+    // `state.aiStage`, which is what the on-screen status strip renders. The
+    // brief was that the user must never wonder whether it's still working,
+    // so each stage transition also fires a toast and the strip carries an
+    // elapsed counter (generation measures 20-45 s against OpenAI).
+
+    /** Serial so a second hold can't race a job that's still uploading. */
+    private val cameraJobs = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "r1-camera-ai").apply { isDaemon = true }
+    }
+    private var aiRecorder: com.r1.launcher.voice.StreamingAudioCapture? = null
+    private var aiPcm: java.io.ByteArrayOutputStream? = null
+    /** Bytes of the photo the current job started from, captured up-front so a
+     *  delete or a swipe mid-flight can't change what gets sent. */
+    private var aiSourceBytes: ByteArray? = null
+
+    private fun reloadPhotos() {
+        val list = com.r1.launcher.camera.PhotoStore.list(this)
+        state.photos.clear()
+        state.photos.addAll(list)
+        if (state.galleryIndex > state.photos.lastIndex) {
+            state.galleryIndex = state.photos.lastIndex.coerceAtLeast(0)
+        }
+    }
+
+    override fun cameraShutter() {
+        if (!state.cameraReady || state.cameraCapturing) return
+        state.cameraCapturing = true
+        state.cameraShutterRequest++
+    }
+
+    override fun cameraFlip() {
+        // One sensor on a gimbal: "flipping" is a motor move. The panel's
+        // DisposableEffect(cameraFacing) issues the actual write.
+        state.cameraFacing = if (state.cameraFacingIsFront)
+            com.r1.launcher.ui.MOTOR_BACK else com.r1.launcher.ui.MOTOR_FACE
+        state.cameraError = null
+    }
+
+    override fun cameraOpenGallery() {
+        reloadPhotos()
+        if (state.photos.isEmpty()) {
+            toast("no photos yet")
+            return
+        }
+        selectTone()
+        state.openGallery()
+    }
+
+    /** Called from the panel for every R1CameraView event. */
+    override fun onCameraEvent(event: com.r1.launcher.ui.R1CameraView.Event) {
+        when (event) {
+            is com.r1.launcher.ui.R1CameraView.Event.Ready -> ui.post {
+                state.cameraReady = true
+                state.cameraError = null
+            }
+            is com.r1.launcher.ui.R1CameraView.Event.Failed -> ui.post {
+                state.cameraCapturing = false
+                state.cameraError = event.message
+                toastFail(event.message)
+            }
+            is com.r1.launcher.ui.R1CameraView.Event.Captured -> {
+                val bytes = event.jpeg
+                cameraJobs.execute {
+                    val saved = com.r1.launcher.camera.PhotoStore.save(
+                        this, bytes, com.r1.launcher.camera.PhotoStore.Kind.SHOT,
+                    )
+                    ui.post {
+                        state.cameraCapturing = false
+                        state.cameraShutterFlash++
+                        if (saved == null) {
+                            state.cameraError = "couldn't save photo"
+                            toastFail("couldn't save photo")
+                        } else {
+                            state.cameraError = null
+                            reloadPhotos()
+                            popTone()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    override fun galleryDeleteCurrent() {
+        val photo = state.galleryCurrent ?: return
+        if (com.r1.launcher.camera.PhotoStore.delete(photo)) {
+            val wasIndex = state.galleryIndex
+            reloadPhotos()
+            if (state.photos.isEmpty()) {
+                state.openGallery()
+            } else {
+                state.galleryIndex = wasIndex.coerceIn(0, state.photos.lastIndex)
+            }
+            toast("deleted")
+        } else {
+            toastFail("couldn't delete")
+        }
+    }
+
+    // ---- voice-driven AI edit ----
+
+    override fun galleryAiRecordStart() {
+        if (state.aiBusy) return
+        val photo = state.galleryCurrent ?: return
+        if (cameraPrefs.openAiKey.isNullOrBlank()) {
+            state.aiStage = com.r1.launcher.AiStage.FAILED
+            state.aiMessage = "no openai key — settings → creds"
+            toastFail("no openai key")
+            return
+        }
+        if (!ensureAudioPerm()) return
+        // Mic is single-consumer; the meetings foreground service wins.
+        if (transcriberBinder?.isRecording == true) {
+            toastFail("stop recording first")
+            return
+        }
+        val bytes = com.r1.launcher.camera.PhotoStore.readBytes(photo)
+        if (bytes == null) {
+            toastFail("couldn't read photo")
+            return
+        }
+        aiSourceBytes = bytes
+        state.aiSourcePath = photo.path
+        state.aiStage = com.r1.launcher.AiStage.RECORDING
+        state.aiMessage = "say what to change"
+        state.aiPrompt = ""
+        state.aiLevel = 0
+
+        val sink = java.io.ByteArrayOutputStream()
+        aiPcm = sink
+        val cap = com.r1.launcher.voice.StreamingAudioCapture()
+        aiRecorder = cap
+        playRecordStartTone()
+        // Same 200ms mic-open delay the other voice paths use: AudioRecord on
+        // VOICE_RECOGNITION steals the audio path and would clip the cue.
+        ui.postDelayed({
+            if (aiRecorder !== cap) return@postDelayed
+            cap.start(object : com.r1.launcher.voice.StreamingAudioCapture.Callback {
+                override fun onPcm(chunk: ByteArray) {
+                    synchronized(sink) { sink.write(chunk) }
+                }
+                override fun onLevel(levelPct: Int) {
+                    ui.post { state.aiLevel = levelPct }
+                }
+                override fun onError(msg: String) {
+                    ui.post { failAi("mic: $msg") }
+                }
+            })
+        }, 200)
+    }
+
+    override fun galleryAiRecordStop() {
+        val cap = aiRecorder ?: return
+        aiRecorder = null
+        cap.close()
+        playRecordStopTone()
+        val sink = aiPcm
+        aiPcm = null
+        // The capture thread may still be draining a final read; give it a
+        // beat before snapshotting, otherwise short holds lose their tail.
+        ui.postDelayed({
+            val pcm = sink?.let { synchronized(it) { it.toByteArray() } } ?: ByteArray(0)
+            startAiJob(pcm)
+        }, 250)
+    }
+
+    private fun startAiJob(pcm: ByteArray) {
+        val key = cameraPrefs.openAiKey
+        val image = aiSourceBytes
+        if (key.isNullOrBlank()) return failAi("no openai key")
+        if (image == null) return failAi("photo went away")
+        // ~0.5 s at 16 kHz mono PCM-16. Below this it's a mis-tap, not speech.
+        if (pcm.size < 16_000) return failAi("too short — hold the button longer")
+
+        state.aiStage = com.r1.launcher.AiStage.TRANSCRIBING
+        state.aiMessage = "sending audio…"
+        state.aiStartedAtMs = System.currentTimeMillis()
+
+        cameraJobs.execute {
+            when (val t = com.r1.launcher.camera.OpenAiClient.transcribe(key, pcm)) {
+                is com.r1.launcher.camera.OpenAiClient.Result.Err -> ui.post { failAi(t.message) }
+                is com.r1.launcher.camera.OpenAiClient.Result.Ok -> {
+                    val prompt = t.value
+                    ui.post {
+                        state.aiPrompt = prompt
+                        state.aiStage = com.r1.launcher.AiStage.GENERATING
+                        state.aiMessage = "this usually takes about 20s"
+                        state.aiStartedAtMs = System.currentTimeMillis()
+                        toast("generating…")
+                    }
+                    runImageEdit(key, image, prompt)
+                }
+            }
+        }
+    }
+
+    /** Second half of the job. Split out so retry can re-enter here without
+     *  making the user speak again. */
+    private fun runImageEdit(key: String, image: ByteArray, prompt: String) {
+        when (val r = com.r1.launcher.camera.OpenAiClient.editImage(key, image, prompt)) {
+            is com.r1.launcher.camera.OpenAiClient.Result.Err -> ui.post { failAi(r.message) }
+            is com.r1.launcher.camera.OpenAiClient.Result.Ok -> {
+                val saved = com.r1.launcher.camera.PhotoStore.save(
+                    this, r.value, com.r1.launcher.camera.PhotoStore.Kind.AI,
+                )
+                ui.post {
+                    if (saved == null) {
+                        failAi("couldn't save result")
+                    } else {
+                        reloadPhotos()
+                        // Jump to the new image — it's newest, so index 0.
+                        state.galleryIndex = 0
+                        state.aiStage = com.r1.launcher.AiStage.DONE
+                        state.aiMessage = "added to gallery"
+                        toastSuccess("image ready")
+                        launchTone()
+                    }
+                }
+            }
+        }
+    }
+
+    override fun galleryAiRetry() {
+        val key = cameraPrefs.openAiKey
+        val image = aiSourceBytes
+        val prompt = state.aiPrompt
+        if (key.isNullOrBlank() || image == null || prompt.isBlank()) {
+            state.aiReset()
+            toast("hold the side button to try again")
+            return
+        }
+        state.aiStage = com.r1.launcher.AiStage.GENERATING
+        state.aiMessage = "retrying…"
+        state.aiStartedAtMs = System.currentTimeMillis()
+        cameraJobs.execute { runImageEdit(key, image, prompt) }
+    }
+
+    private fun failAi(message: String) {
+        aiRecorder?.close()
+        aiRecorder = null
+        aiPcm = null
+        state.aiStage = com.r1.launcher.AiStage.FAILED
+        state.aiMessage = message
+        state.aiLevel = 0
+        toastFail(message)
+    }
+
     override fun credentialsRowActivate(idx: Int) {
         // Row layout (kept in sync with SettingsCredentialsPanel):
-        //   1=elevenlabs, 2=hermes, 3=ntfy_topic, 4=webhook (regen), 5=control secret (regen)
+        //   1=elevenlabs, 2=hermes, 3=openai, 4=ntfy_topic, 5=webhook (regen),
+        //   6=control secret (regen)
         when (idx) {
             1 -> { state.credentialsEditField = "elevenlabs"; state.credentialsEditInput = "" }
             2 -> { state.credentialsEditField = "hermes"; state.credentialsEditInput = "" }
-            3 -> {
+            3 -> { state.credentialsEditField = "openai"; state.credentialsEditInput = "" }
+            4 -> {
                 state.credentialsEditField = "ntfy_topic"
                 state.credentialsEditInput = ntfyPrefs.topic
             }
-            4 -> {
+            5 -> {
                 // Webhook token — regenerate in place, no keyboard.
                 regenerateWebhookToken()
                 toast("new webhook token: …${state.webhookTokenDisplay}")
             }
-            5 -> {
+            6 -> {
                 // Control secret — regenerate in place. Any open adb snippets
                 // must switch to the new value.
                 state.controlSecretDisplay = notifPrefs.regenerateControlSecret()
@@ -6180,6 +6482,15 @@ override fun hermesPasteServerUrlFromClipboard() {
                 hermesSetApiKey(v)
                 refreshCredentialsDisplay()
                 if (v.isNotBlank()) toast("hermes key saved")
+            }
+            "openai" -> {
+                if (v.isNotBlank() && !com.r1.launcher.camera.CameraPrefs.looksValid(v)) {
+                    toastFail("doesn't look like an openai key")
+                } else {
+                    cameraPrefs.openAiKey = v
+                    refreshCredentialsDisplay()
+                    if (v.isNotBlank()) toastSuccess("openai key saved")
+                }
             }
             "ntfy_topic" -> {
                 ntfySetTopic(v)

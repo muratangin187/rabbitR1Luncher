@@ -24,6 +24,19 @@ interface LauncherHost {
     fun rebootDevice()
     fun powerOffDevice()
     fun resetCameraMotor()
+
+    // --- camera app ---
+    fun cameraShutter()
+    fun cameraFlip()
+    fun cameraOpenGallery()
+    fun galleryDeleteCurrent()
+    /** Side-button hold in GALLERY_VIEW: open mic for an edit instruction. */
+    fun galleryAiRecordStart()
+    fun galleryAiRecordStop()
+    /** Re-run the last failed job with the same photo + transcript. */
+    fun galleryAiRetry()
+    /** Forwarded from the panel's R1CameraView callback. */
+    fun onCameraEvent(event: com.r1.launcher.ui.R1CameraView.Event)
     fun startWifiScan()
     fun connectToWifi(ssid: String, pass: String)
     fun toggleWifiShare(enable: Boolean)
@@ -444,6 +457,18 @@ fun LauncherState.wheelUp(host: LauncherHost) {
                 smsThreadFocus--; host.navTone()
             }
         }
+        // Wheel up/down is the documented way to swap which way the lens
+        // points. It's a motor move, not a camera-id switch — see R1CameraView.
+        Panel.CAMERA -> {
+            if (!cameraFacingIsFront) { host.cameraFlip(); host.navTone() }
+        }
+        Panel.GALLERY -> {
+            if (galleryFocus <= 0) { back(); host.backTone() }
+            else { galleryFocus--; host.navTone() }
+        }
+        Panel.GALLERY_VIEW -> {
+            if (galleryIndex > 0) { galleryIndex--; host.navTone() }
+        }
         Panel.TESTING -> {
             val prev = testingFocus
             testingFocus = (testingFocus - 1).coerceAtLeast(0)
@@ -728,6 +753,15 @@ fun LauncherState.wheelDown(host: LauncherHost) {
             smsThreadFocus = (smsThreadFocus + 1).coerceAtMost(maxRow)
             if (prev != smsThreadFocus) host.navTone()
         }
+        Panel.CAMERA -> {
+            if (cameraFacingIsFront) { host.cameraFlip(); host.navTone() }
+        }
+        Panel.GALLERY -> {
+            if (galleryFocus < photos.size) { galleryFocus++; host.navTone() }
+        }
+        Panel.GALLERY_VIEW -> {
+            if (galleryIndex < photos.lastIndex) { galleryIndex++; host.navTone() }
+        }
         Panel.TESTING -> {
             val prev = testingFocus
             testingFocus = (testingFocus + 1).coerceAtMost(1)
@@ -989,6 +1023,14 @@ fun LauncherState.activate(host: LauncherHost) {
             // Only the back row at idx 0 is actionable; bubbles are read-only.
             if (smsThreadFocus == 0) { back(); host.backTone() }
         }
+        // Wheel press == shutter, so the side button's single-tap (which
+        // routes here for every non-HOME panel) takes a photo for free.
+        Panel.CAMERA -> host.cameraShutter()
+        Panel.GALLERY -> {
+            if (galleryFocus == 0) { back(); host.backTone() }
+            else openGalleryView(galleryFocus - 1)
+        }
+        Panel.GALLERY_VIEW -> { /* wheel scrolls photos; actions are on-screen + side-button hold */ }
         Panel.TESTING -> {
             if (testingFocus == 0) { back(); host.backTone() }
             else { testingCount++; host.popTone() }

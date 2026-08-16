@@ -22,9 +22,27 @@ import com.r1.launcher.transcriber.TranscriberDetailAction
 import com.r1.launcher.translator.ProviderId
 import com.r1.launcher.translator.TranslationMessage
 
-enum class Panel { HOME, ONBOARDING, APPS, SETTINGS, SETTINGS_DISPLAY, SETTINGS_SOUND, SETTINGS_DEVICE, SETTINGS_ABOUT, SETTINGS_VOICE, SETTINGS_VOICE_TUNING, SETTINGS_VOICE_SUBSCRIPTION, SETTINGS_LANGUAGE, SETTINGS_CREDENTIALS, NETWORK, WIFI_SCAN, WIFI_PASSWORD, WIFI_SHARE, WIFI_SHARE_EDIT, REMOTE_PANEL, PANEL_PASSCODE, NTFY_CONFIG, BT_SCAN, BRIGHTNESS, VOLUME, UI_VOLUME, FACTORY_CONFIRM, OPENCLAW_QR, OPENCLAW_CHAT, OPENCLAW_CAMERA, OPENCLAW_SETTINGS, OPENCLAW_SESSIONS, MESSAGES, MESSAGES_THREAD, TERMINAL, HERMES_CHAT, HERMES_CONFIG, HERMES_QR, HERMES_CONNECTION_EDIT, TRANSLATOR_ONBOARDING, TRANSLATOR, TRANSLATOR_SETTINGS, TRANSCRIBER_LIST, TRANSCRIBER_RECORDING, TRANSCRIBER_DETAIL, TRANSCRIBER_SETTINGS, NOTIFICATIONS, TESTING }
+enum class Panel { HOME, ONBOARDING, APPS, SETTINGS, SETTINGS_DISPLAY, SETTINGS_SOUND, SETTINGS_DEVICE, SETTINGS_ABOUT, SETTINGS_VOICE, SETTINGS_VOICE_TUNING, SETTINGS_VOICE_SUBSCRIPTION, SETTINGS_LANGUAGE, SETTINGS_CREDENTIALS, NETWORK, WIFI_SCAN, WIFI_PASSWORD, WIFI_SHARE, WIFI_SHARE_EDIT, REMOTE_PANEL, PANEL_PASSCODE, NTFY_CONFIG, BT_SCAN, BRIGHTNESS, VOLUME, UI_VOLUME, FACTORY_CONFIRM, OPENCLAW_QR, OPENCLAW_CHAT, OPENCLAW_CAMERA, OPENCLAW_SETTINGS, OPENCLAW_SESSIONS, MESSAGES, MESSAGES_THREAD, TERMINAL, HERMES_CHAT, HERMES_CONFIG, HERMES_QR, HERMES_CONNECTION_EDIT, TRANSLATOR_ONBOARDING, TRANSLATOR, TRANSLATOR_SETTINGS, TRANSCRIBER_LIST, TRANSCRIBER_RECORDING, TRANSCRIBER_DETAIL, TRANSCRIBER_SETTINGS, NOTIFICATIONS, TESTING, CAMERA, GALLERY, GALLERY_VIEW }
 
 enum class WifiShareEditTarget { SSID, PASSWORD }
+
+/**
+ * Lifecycle of one voice-driven AI image edit. The user is told which of these
+ * they're in at all times — a silent 20-40s wait is the whole reason this is a
+ * staged enum and not a boolean `busy` flag.
+ */
+enum class AiStage {
+    IDLE,
+    /** Mic open, side button still held. */
+    RECORDING,
+    /** Audio uploaded, waiting on the transcript. */
+    TRANSCRIBING,
+    /** Transcript + photo uploaded, waiting on the generated image. */
+    GENERATING,
+    /** New image saved to the gallery. */
+    DONE,
+    FAILED,
+}
 
 /** Kind of toast — drives the edge color in [com.r1.launcher.ui.ToastOverlay]. */
 enum class ToastKind { INFO, SUCCESS, FAIL }
@@ -567,6 +585,8 @@ class LauncherState {
      *  refreshed on every successful save. Keys themselves stay in their
      *  per-app *Prefs objects — these are read-only snapshots for UI. */
     var hasHermesKey by mutableStateOf(false)
+    var hasOpenAiKey by mutableStateOf(false)
+    var openAiKeyTail by mutableStateOf("")
     var hermesKeyTail by mutableStateOf("")
     /** Webhook bearer token — read-only on this surface; regenerate button
      *  triggers [LauncherHost.regenerateWebhookToken]. */
@@ -834,6 +854,75 @@ class LauncherState {
         panel = Panel.HERMES_QR
     }
 
+    // --- camera app ---
+    /** Motor angle the lens is held at while the camera panel is open.
+     *  MOTOR_FACE (0) = pointing at the user, MOTOR_BACK (180) = at the scene.
+     *  There is one physical sensor; "flipping" rotates it. */
+    var cameraFacing by mutableIntStateOf(180)
+    val cameraFacingIsFront: Boolean get() = cameraFacing <= 90
+    /** True from shutter press until the JPEG lands — freezes the shutter. */
+    var cameraCapturing by mutableStateOf(false)
+    /** False until the preview's first repeating request is accepted. */
+    var cameraReady by mutableStateOf(false)
+    var cameraError by mutableStateOf<String?>(null)
+    /** Bumped by the host to ask the live preview for a frame. The panel owns
+     *  the R1CameraView instance, so this counter is the only way in. */
+    var cameraShutterRequest by mutableIntStateOf(0)
+    /** Flashes white over the preview for one frame after a capture. */
+    var cameraShutterFlash by mutableIntStateOf(0)
+
+    /** Gallery contents, newest first. Rebuilt from disk by the host. */
+    val photos = mutableStateListOf<com.r1.launcher.camera.PhotoStore.Photo>()
+    /** Focused tile in Panel.GALLERY (0 = back row, 1+ = photos). */
+    var galleryFocus by mutableIntStateOf(0)
+    /** Index into [photos] shown in Panel.GALLERY_VIEW. */
+    var galleryIndex by mutableIntStateOf(0)
+    val galleryCurrent: com.r1.launcher.camera.PhotoStore.Photo?
+        get() = photos.getOrNull(galleryIndex)
+
+    // --- AI image edit job ---
+    var aiStage by mutableStateOf(AiStage.IDLE)
+    /** One-line human-readable status shown under the stage label. */
+    var aiMessage by mutableStateOf("")
+    /** Live partial/final transcript of what the user said. */
+    var aiPrompt by mutableStateOf("")
+    /** Mic level 0-100 while RECORDING, for the level meter. */
+    var aiLevel by mutableIntStateOf(0)
+    /** Wall-clock ms when GENERATING started — drives the elapsed counter. */
+    var aiStartedAtMs by mutableStateOf(0L)
+    /** Path of the photo the in-flight job was started from, so a job that
+     *  finishes after the user swipes away still reports against the right one. */
+    var aiSourcePath by mutableStateOf("")
+    val aiBusy: Boolean
+        get() = aiStage == AiStage.RECORDING || aiStage == AiStage.TRANSCRIBING || aiStage == AiStage.GENERATING
+
+    fun openCamera() {
+        cameraError = null
+        cameraReady = false
+        panel = Panel.CAMERA
+    }
+
+    fun openGallery() {
+        galleryFocus = if (photos.isEmpty()) 0 else 1
+        panel = Panel.GALLERY
+    }
+
+    fun openGalleryView(index: Int) {
+        if (photos.isEmpty()) return
+        galleryIndex = index.coerceIn(0, photos.lastIndex)
+        panel = Panel.GALLERY_VIEW
+    }
+
+    /** Clear a finished job so the status strip collapses. */
+    fun aiReset() {
+        aiStage = AiStage.IDLE
+        aiMessage = ""
+        aiPrompt = ""
+        aiLevel = 0
+        aiStartedAtMs = 0L
+        aiSourcePath = ""
+    }
+
     // --- testing scratch panel ---
     /** 0 = back row, 1 = the button. */
     var testingFocus by mutableIntStateOf(0)
@@ -960,6 +1049,9 @@ class LauncherState {
             // Notifications open from the HOME badge — back returns there.
             Panel.NOTIFICATIONS -> Panel.HOME
             Panel.TESTING -> Panel.APPS
+            Panel.CAMERA -> Panel.APPS
+            Panel.GALLERY -> Panel.CAMERA
+            Panel.GALLERY_VIEW -> Panel.GALLERY
             Panel.HOME -> Panel.HOME
         }
     }
