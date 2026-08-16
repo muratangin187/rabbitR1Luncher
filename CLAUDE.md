@@ -10,32 +10,30 @@ Compose-based HOME launcher for the **Rabbit R1** (480×480 round, MT6765). Ship
 
 ## Bootstrap & build
 
-`gradle-wrapper.jar` and `gradlew*` are not checked in. Generate once:
+**See `DEVELOPING.md` for the host setup and the day-to-day loop.** Short version:
 
 ```bash
-bash bootstrap.sh   # downloads Gradle 8.9 to .bootstrap/, runs `gradle wrapper`
+./bootstrap.sh   # once: JDK/SDK check, fetch platform.keystore, regenerate gradle-wrapper.jar
+./r1.sh          # build + install + restart on the connected device
 ```
 
-Normal loop:
+`gradle-wrapper.jar` is `.gitignored`, so `./gradlew` does not work on a fresh
+clone until `bootstrap.sh` has run.
 
-```bash
-./gradlew assembleDebug                                    # → app/build/outputs/apk/debug/app-debug.apk
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell 'am force-stop com.r1.launcher; am start -n com.r1.launcher/.LauncherActivity'
-```
-
-- **`versionCode` in `app/build.gradle.kts` is pinned to `1000` locally for debug, but the file is `git update-index --skip-worktree`**, so `git status`/commits ignore the local value. HEAD tracks the real release version (`versionCode=5` / `versionName="1.1.0"` at time of writing). `adb install -r` at the same `versionCode` is allowed — you don't need to bump per install. The `/system/app/R1Launcher/` baked into CarrotOS is the floor; if it ever passes `1000`, re-pin higher. `INSTALL_FAILED_VERSION_DOWNGRADE` = system image was rebuilt with a higher number, raise the local pin. To cut a release: `git update-index --no-skip-worktree app/build.gradle.kts`, edit to the real release version, commit, `git tag vX.Y.Z && git push --tags` (CI fires on tags, not main pushes), then re-pin and re-skip.
-- **`am start` won't replace a foreground launcher process.** "Activity not started, intent has been delivered..." means old code is still in memory. Force-stop via carroot first.
+- **`versionCode` is overridden from the command line, not edited in place.** The `/system/app/R1Launcher/` copy baked into CarrotOS is the install floor and currently sits at **1000**, while HEAD tracks the real release number (15). Pass `-Pr1.versionCode=<n>` to clear the floor; `r1.sh` reads the floor off the device via `dumpsys package` and passes the next number automatically. `INSTALL_FAILED_VERSION_DOWNGRADE` means the ROM was rebuilt higher — `r1.sh` picks that up on its own. (Upstream instead pins the value in the file and hides it with `git update-index --skip-worktree`; this fork dropped that because it silently drops the change from every diff.) To cut a release: bump `versionCode`+`versionName` in `app/build.gradle.kts`, commit, `git tag vX.Y.Z && git push origin main --tags` — CI fires on tags, not main pushes.
+- **`am start` won't replace a foreground launcher process.** "Activity not started, intent has been delivered..." means old code is still in memory. Force-stop first (`r1.sh` does).
 - **`buildConfig` must stay enabled.** `gradle.properties` sets `android.defaults.buildfeatures.buildconfig=false` globally, but `AppsPanel.kt`'s `carrotOsInfo()` reads `BuildConfig.CARROT_VERSION` / `CARROT_BUILD_ID`. The app module therefore keeps `buildFeatures { buildConfig = true }` + two `buildConfigField("String", ...)` declarations in `defaultConfig` (empty strings by default — they fall through to `ro.lineage.*` / `Build` at runtime). Removing either breaks the build with a misleading "K expected" type error, not "unresolved reference".
 
-### Building on macOS (this dev host)
+### Host setup (this fork)
 
-The CarrotOS *image* is built on a Linux box (`/home/khalifa/lineage`); the *launcher APK* is built here on macOS. This host differs from the Linux flow above:
+This fork builds the launcher APK on Arch Linux. There is **no local CarrotOS
+image tree** — the ROM is consumed as a flashed device, not rebuilt. Anything in
+this file about `/home/khalifa/lineage`, `make systemimage`, or `fastboot flash`
+is upstream context, not a workflow available here.
 
-- **No `java` on PATH and no `bootstrap.sh` in the tree.** Use Android Studio's bundled JDK: `/Applications/Android Studio.app/Contents/jbr/Contents/Home` (Java 21 — runs AGP 8.7.2 / Gradle 8.9 / Kotlin 2.0.21 fine even though the project targets Java 17 bytecode). Export it as `JAVA_HOME`.
-- **Regenerate the wrapper jar from the cached Gradle 8.9.** A distribution is already unpacked at `~/.gradle/wrapper/dists/gradle-8.9-bin/.../gradle-8.9/bin/gradle`; run that binary once with `gradle wrapper --gradle-version 8.9 --distribution-type bin` to recreate `gradle/wrapper/gradle-wrapper.jar` (gitignored), after which `./gradlew` works given `JAVA_HOME`.
-- **`platform.keystore` (required for signing, gitignored) is recoverable from `/Users/khalifa/Desktop/r1.zip`** — entry `rabbitR1Luncher/platform.keystore`, PKCS12, store/key pass `android`, alias `platform`, SHA-256 `c8a2e9bc…192ab8`. Drop it at the repo root before building. (The zip also holds older prebuilt `app-debug.apk` / `app-release.apk` under `app/build/outputs/`.)
-- **`r1.sh`** (repo root, gitignored host helper) wraps all of the above: `./r1.sh` = build + `install -r` + restart; also `build` / `install` / `logcat`. Auto-detects the JDK.
+- JDK 17 at `/usr/lib/jvm/java-17-openjdk`, Android SDK at `~/Android/Sdk`. Both exported by `~/.config/android-dev.env`, sourced from `.bashrc`. `android-doctor` health-checks the chain.
+- **`platform.keystore`** (gitignored, required by both build types) is the **public AOSP test key**, SHA-256 `c8a2e9bc…192ab8`, PKCS12, store/key pass `android`, alias `platform`. `bootstrap.sh` fetches it from `khalifa007/carrotOS-harness` and verifies the fingerprint before letting the build proceed.
+- **`r1.sh`** (tracked in this fork, unlike upstream) wraps the loop: build / install / restart / logcat / screenshot / screenrecord / scrcpy mirror / carroot root shell / adb-over-wifi / doctor.
 
 ## Pinned versions — do not drift without testing
 
@@ -312,14 +310,27 @@ Misc:
 
 ## Testing loop
 
-Emulator loop from `../mylauncher/CLAUDE.md` — same AVD (`R1Emu`, 480×480 round, API 33):
+**There are no automated tests** — no `app/src/test`, no `androidTest`. Every
+change is verified by running it on hardware. `DEVELOPING.md` has the full
+rationale and toolkit; the essentials:
 
 ```bash
-"$LOCALAPPDATA/Android/Sdk/emulator/emulator.exe" -avd R1Emu -no-snapshot -gpu host &
-bash deploy_emu.sh
-adb exec-out screencap -p > emu.png
-python3 -c "from PIL import Image; print(Image.open(r'emu.png').getpixel((x,y)))"
+./r1.sh              # build + install + restart
+./r1.sh mirror       # scrcpy — the round panel in a desktop window, touch works
+./r1.sh log          # launcher tags + AndroidRuntime:E + ActivityManager:E
+./r1.sh root <cmd>   # root shell through carroot on 127.0.0.1:1337
+./r1.sh doctor       # version floor, HOME resolution, carroot liveness
 ```
+
+The emulator is **not** usable on this host — no `vmx` in `/proc/cpuinfo`, so
+VT-x is off in firmware and the emulator would fall back to full CPU emulation.
+Even with it enabled, an AVD has no carroot socket, no side button, no scroll
+wheel and no camera motor, so the interesting panels need hardware anyway.
+
+Drive the UI headlessly with D-pad keycodes (`./r1.sh keys`). The **side
+button** is the exception: it's `BUTTON_1` via the ROM keylayout and its
+tap / double-tap (350 ms) / long-press (500 ms) machine reads real DOWN/UP
+timing, which `input keyevent` doesn't reproduce — test it by hand.
 
 For OpenClaw work: real R1 + running openclaw gateway on a reachable host. After install:
 
