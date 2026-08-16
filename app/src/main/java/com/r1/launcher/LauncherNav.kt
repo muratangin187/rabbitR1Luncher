@@ -444,6 +444,11 @@ fun LauncherState.wheelUp(host: LauncherHost) {
                 smsThreadFocus--; host.navTone()
             }
         }
+        Panel.TESTING -> {
+            val prev = testingFocus
+            testingFocus = (testingFocus - 1).coerceAtLeast(0)
+            if (prev != testingFocus) host.navTone()
+        }
         Panel.TERMINAL -> { terminalScrollIndex++; host.navTone() }
         Panel.HERMES_CHAT -> { host.hermesScrollUp(); host.navTone() }
         Panel.HERMES_CONFIG -> {
@@ -723,6 +728,11 @@ fun LauncherState.wheelDown(host: LauncherHost) {
             smsThreadFocus = (smsThreadFocus + 1).coerceAtMost(maxRow)
             if (prev != smsThreadFocus) host.navTone()
         }
+        Panel.TESTING -> {
+            val prev = testingFocus
+            testingFocus = (testingFocus + 1).coerceAtMost(1)
+            if (prev != testingFocus) host.navTone()
+        }
         Panel.TERMINAL -> {
             val prev = terminalScrollIndex
             terminalScrollIndex = (terminalScrollIndex - 1).coerceAtLeast(0)
@@ -978,6 +988,10 @@ fun LauncherState.activate(host: LauncherHost) {
         Panel.MESSAGES_THREAD -> {
             // Only the back row at idx 0 is actionable; bubbles are read-only.
             if (smsThreadFocus == 0) { back(); host.backTone() }
+        }
+        Panel.TESTING -> {
+            if (testingFocus == 0) { back(); host.backTone() }
+            else { testingCount++; host.popTone() }
         }
         Panel.TERMINAL -> {
             val cmd = terminalInput.trim()

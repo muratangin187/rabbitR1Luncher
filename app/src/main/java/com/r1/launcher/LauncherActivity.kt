@@ -843,6 +843,7 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
                 state.apps.add(AppEntry.Hermes)
                 state.apps.add(AppEntry.Translator)
                 state.apps.add(AppEntry.Meetings)
+                state.apps.add(AppEntry.Testing)
                 state.apps.add(AppEntry.Settings)
                 state.appsLoaded = true
                 if (state.appsFocus >= state.apps.size) state.appsFocus = 0
@@ -1205,6 +1206,10 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
             AppEntry.Meetings -> {
                 selectTone()
                 transcriberOpen()
+            }
+            AppEntry.Testing -> {
+                selectTone()
+                state.openTesting()
             }
             AppEntry.Translator -> {
                 selectTone()

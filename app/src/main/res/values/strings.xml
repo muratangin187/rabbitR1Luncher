@@ -251,4 +251,5 @@
     <string name="home_hotspot_zero">hotspot on · 0 devices</string>
     <string name="home_hotspot_one">1 device connected</string>
     <string name="home_hotspot_many">%d devices connected</string>
+    <string name="app_label_testing">testing</string>
 </resources>

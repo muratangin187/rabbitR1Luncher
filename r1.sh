@@ -9,6 +9,8 @@
 #   ./r1.sh shot [name]     screenshot -> shots/
 #   ./r1.sh rec [secs]      screen recording -> shots/
 #   ./r1.sh mirror          live screen via scrcpy (touch + keyboard work)
+#   ./r1.sh key <K...>      wake, then send keycodes (DPAD_DOWN, CENTER, BACK)
+#   ./r1.sh wake            wake the screen
 #   ./r1.sh sh <cmd...>     adb shell (unprivileged)
 #   ./r1.sh root <cmd...>   run as ROOT through carroot on 127.0.0.1:1337
 #   ./r1.sh keys            wheel/side-button key events for driving the UI
@@ -116,6 +118,23 @@ case "${1:-all}" in
     # --stay-awake stops it sleeping mid-session.
     exec scrcpy --window-title "R1" --stay-awake --window-width 480
     ;;
+
+  # Scripted input eats its first event waking a slept screen, which silently
+  # desyncs a whole key sequence. Always wake, settle, then send.
+  key)
+    need_device; shift
+    [ $# -gt 0 ] || die "usage: ./r1.sh key DPAD_DOWN [DPAD_CENTER ...]"
+    "$ADB" shell input keyevent KEYCODE_WAKEUP >/dev/null 2>&1
+    sleep 0.6
+    for k in "$@"; do
+      case "$k" in KEYCODE_*) code="$k" ;; *) code="KEYCODE_$k" ;; esac
+      "$ADB" shell input keyevent "$code"
+      sleep 0.5
+    done
+    say "sent: $*"
+    ;;
+
+  wake) need_device; "$ADB" shell input keyevent KEYCODE_WAKEUP; say "awake" ;;
 
   sh)  need_device; shift; exec "$ADB" shell "$@" ;;
 

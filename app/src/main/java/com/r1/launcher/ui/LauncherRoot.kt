@@ -444,6 +444,12 @@ fun LauncherRoot(
             onBack = { state.back(); host.backTone() },
         )
 
+        TestingPanel(
+            state = state,
+            onBack = { state.back(); host.backTone() },
+            onTap = { state.testingCount++; host.popTone() },
+        )
+
         TerminalPanel(
             state = state,
             onBack = { state.back(); host.backTone() },

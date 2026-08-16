@@ -289,6 +289,7 @@ private fun AppCard(
         AppEntry.Hermes -> "_r1_hermes"
         AppEntry.Meetings -> "_r1_meetings"
         AppEntry.Translator -> "_r1_translator"
+        AppEntry.Testing -> "_r1_testing"
     }
     // Only the matching synthetic resource is resolved — previous code called
     // painterResource() + stringResource() six times per card (one per
@@ -302,6 +303,7 @@ private fun AppCard(
         AppEntry.Hermes -> painterResource(R.drawable.ic_hermes)
         AppEntry.Meetings -> painterResource(R.drawable.ic_meetings)
         AppEntry.Translator -> painterResource(R.drawable.ic_language)
+        AppEntry.Testing -> painterResource(R.drawable.ic_thinking)
     }
 
     var iconPainter by remember(pkg) {
@@ -317,6 +319,7 @@ private fun AppCard(
         AppEntry.Hermes -> stringResource(R.string.app_label_hermes)
         AppEntry.Meetings -> stringResource(R.string.app_label_meetings)
         AppEntry.Translator -> stringResource(R.string.app_label_translator)
+        AppEntry.Testing -> stringResource(R.string.app_label_testing)
     }
     var label by remember(pkg, syntheticLabel) {
         mutableStateOf(
@@ -451,6 +454,7 @@ private fun cardBackground(entry: AppEntry, idx: Int): Color = when (entry) {
     AppEntry.Hermes -> AppThemes.Hermes
     AppEntry.Meetings -> AppThemes.Meetings
     AppEntry.Translator -> AppThemes.Translator
+    AppEntry.Testing -> AppThemes.Testing
 }
 
 private fun appKey(entry: AppEntry): String = when (entry) {
@@ -462,6 +466,7 @@ private fun appKey(entry: AppEntry): String = when (entry) {
     AppEntry.Hermes -> "hermes/hermes"
     AppEntry.Meetings -> "meetings/meetings"
     AppEntry.Translator -> "translator/translator"
+    AppEntry.Testing -> "testing/testing"
 }
 
 private fun appContentType(entry: AppEntry): String = when (entry) {
@@ -473,6 +478,7 @@ private fun appContentType(entry: AppEntry): String = when (entry) {
     AppEntry.Hermes -> "hermes"
     AppEntry.Meetings -> "meetings"
     AppEntry.Translator -> "translator"
+    AppEntry.Testing -> "testing"
 }
 
 class FolderShape : androidx.compose.ui.graphics.Shape {
