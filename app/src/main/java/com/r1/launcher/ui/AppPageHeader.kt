@@ -40,7 +40,7 @@ import androidx.compose.ui.unit.sp
  * Compact layout (`compact = true`) — single row, used by chat / terminal / claude
  * / transcriber-detail style panels where the panel content is the focal element:
  *
- *   [< back]  subtitle           [trailing]  [+]  [⚙]
+ *   [< back]  subtitle [trailing]  [+]  [⚙]
  *
  * Floating layout (`floating = true`, implies compact) — same single-row content
  * but rendered against a top-down black→transparent gradient backdrop so a
@@ -79,18 +79,20 @@ fun AppPageHeader(
 
     if (floating) {
         Box(
-            modifier = modifier
-                .fillMaxWidth()
-                .height(60.dp)
-                .background(
-                    Brush.verticalGradient(
-                        colors = listOf(
-                            Color(0xCC000000),
-                            Color(0x66000000),
-                            Color.Transparent,
+            modifier =
+                modifier
+                    .fillMaxWidth()
+                    .height(60.dp)
+                    .background(
+                        Brush.verticalGradient(
+                            colors =
+                                listOf(
+                                    Color(0xCC000000),
+                                    Color(0x66000000),
+                                    Color.Transparent,
+                                ),
                         ),
                     ),
-                ),
         ) {
             HeaderRow(
                 backFocused = backFocused,
@@ -104,9 +106,10 @@ fun AppPageHeader(
                 onGear = onGear,
                 clearFocused = clearFocused,
                 onClear = onClear,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 4.dp),
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 4.dp),
             )
         }
         return
@@ -125,17 +128,19 @@ fun AppPageHeader(
             onGear = onGear,
             clearFocused = clearFocused,
             onClear = onClear,
-            modifier = modifier
-                .fillMaxWidth()
-                .padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 4.dp),
+            modifier =
+                modifier
+                    .fillMaxWidth()
+                    .padding(start = 10.dp, end = 10.dp, top = 10.dp, bottom = 4.dp),
         )
         return
     }
 
     Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(top = 14.dp, bottom = 8.dp),
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .padding(top = 14.dp, bottom = 8.dp),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -270,10 +275,11 @@ private fun HeaderBackPill(
     // Focus state still flips to a solid orange tile so wheel navigation reads.
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier
-            .background(if (focused) FOCUS_HIGHLIGHT else Color.Transparent)
-            .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 2.dp),
+        modifier =
+            modifier
+                .background(if (focused) FOCUS_HIGHLIGHT else Color.Transparent)
+                .clickable { onClick() }
+                .padding(horizontal = 8.dp, vertical = 2.dp),
     ) {
         Text(
             text = "< back",
@@ -286,16 +292,22 @@ private fun HeaderBackPill(
 }
 
 @Composable
-private fun HeaderIconButton(iconRes: Int, focused: Boolean, themeColor: Color, onClick: () -> Unit) {
+private fun HeaderIconButton(
+    iconRes: Int,
+    focused: Boolean,
+    themeColor: Color,
+    onClick: () -> Unit,
+) {
     val bg = if (focused) FOCUS_HIGHLIGHT else Color.Transparent
     val tint = if (focused) Color.Black else themeColor
     // Hard-cornered focus highlight to match the rest of the pixel idiom.
     Box(
-        modifier = Modifier
-            .background(bg)
-            .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .size(28.dp),
+        modifier =
+            Modifier
+                .background(bg)
+                .clickable { onClick() }
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .size(28.dp),
         contentAlignment = Alignment.Center,
     ) {
         Image(
@@ -308,17 +320,23 @@ private fun HeaderIconButton(iconRes: Int, focused: Boolean, themeColor: Color, 
 }
 
 @Composable
-private fun HeaderTextButton(label: String, focused: Boolean, themeColor: Color, onClick: () -> Unit) {
+private fun HeaderTextButton(
+    label: String,
+    focused: Boolean,
+    themeColor: Color,
+    onClick: () -> Unit,
+) {
     val type = LocalR1Type.current
     val bg = if (focused) FOCUS_HIGHLIGHT else Color.Transparent
     val color = if (focused) Color.Black else themeColor
     // Hard-cornered focus highlight.
     Box(
-        modifier = Modifier
-            .background(bg)
-            .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .size(28.dp),
+        modifier =
+            Modifier
+                .background(bg)
+                .clickable { onClick() }
+                .padding(horizontal = 8.dp, vertical = 4.dp)
+                .size(28.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -344,9 +362,10 @@ fun SectionHeader(
 ) {
     val type = LocalR1Type.current
     Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(top = 4.dp, bottom = 0.dp, start = 12.dp, end = 12.dp),
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .padding(top = 4.dp, bottom = 0.dp, start = 12.dp, end = 12.dp),
     ) {
         Text(
             text = label.uppercase(),
@@ -364,14 +383,15 @@ fun SectionHeader(
  * inherit their parent app's color.
  */
 object AppThemes {
-    val Messages = Color(0xFFFF003C)   // bright red
-    val OpenClaw = Color(0xFFFF2A9D)   // neon pink
-    val Terminal = Color(0xFF00E5FF)   // cyan / light blue
-    val Meetings = Color(0xFF00FF38)   // lime green
-    val Settings = Color(0xFFFFD600)   // sunshine yellow
-    val Hermes = Color(0xFFFFB300)     // warm amber
-    val Chat = Color(0xFF9DFF3C)      // acid lime — distinct from Camera blue
-    val Camera = Color(0xFF00C2FF)     // electric blue — the camera/gallery family
-    val Testing = Color(0xFF9B5DE5)    // violet — unused elsewhere in the palette
+    val Messages = Color(0xFFFF003C) // bright red
+    val OpenClaw = Color(0xFFFF2A9D) // neon pink
+    val Terminal = Color(0xFF00E5FF) // cyan / light blue
+    val Meetings = Color(0xFF00FF38) // lime green
+    val Settings = Color(0xFFFFD600) // sunshine yellow
+    val Hermes = Color(0xFFFFB300) // warm amber
+    val Chat = Color(0xFF9DFF3C) // acid lime — distinct from Camera blue
+    val Camera = Color(0xFF00C2FF) // electric blue — the camera/gallery family
+    val Testing = Color(0xFF9B5DE5) // violet — unused elsewhere in the palette
     val Translator = Color(0xFF14B8A6) // teal — distinct from Hermes amber & OpenClaw pink
+    val Madlen = Color(0xFFB388FF) // lavender — the Madlen teacher-chat assistant
 }

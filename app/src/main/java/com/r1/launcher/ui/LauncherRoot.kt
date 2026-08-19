@@ -473,6 +473,53 @@ fun LauncherRoot(
             onRowClick = { idx -> host.chatSettingsActivate(idx) },
         )
 
+        MadlenLoginPanel(
+            state = state,
+            onBack = { state.back(); host.backTone() },
+            onLogin = { host.madlenLogin(); host.popTone() },
+            onOpenField = { f -> host.madlenOpenLoginField(f) },
+            onCommitField = { host.madlenCommitLoginField(); host.popTone() },
+            onKeyPress = { ch -> state.madlenEditInput += ch },
+            onBackspace = {
+                if (state.madlenEditInput.isNotEmpty()) {
+                    state.madlenEditInput = state.madlenEditInput.dropLast(1)
+                }
+            },
+            onCloseKb = { state.madlenEditField = ""; state.madlenEditInput = "" },
+        )
+
+        MadlenListPanel(
+            state = state,
+            onBack = { state.back(); host.backTone() },
+            onNew = { host.madlenNew() },
+            onOpen = { id -> host.madlenOpen(id) },
+            onSettings = { state.openMadlenSettings(); host.selectTone() },
+            onRefresh = { host.madlenRefresh() },
+        )
+
+        MadlenChatPanel(
+            state = state,
+            onBack = { state.back(); host.backTone() },
+            onSend = { host.madlenSend() },
+            onStop = { host.madlenStop() },
+            onRetry = { host.madlenRetry() },
+            onSettings = { state.openMadlenSettings(); host.selectTone() },
+            onToggleKb = { state.madlenKbVisible = !state.madlenKbVisible; host.popTone() },
+            onKeyPress = { ch -> state.madlenInput += ch },
+            onBackspace = {
+                if (state.madlenInput.isNotEmpty()) {
+                    state.madlenInput = state.madlenInput.dropLast(1)
+                }
+            },
+            onPaste = { host.madlenPaste(); host.popTone() },
+            onSpeakToggle = { host.madlenToggleSpeak() },
+        )
+
+        MadlenSettingsPanel(
+            state = state,
+            onRowClick = { idx -> host.madlenSettingsActivate(idx) },
+        )
+
         CameraPanel(
             state = state,
             onBack = { state.back(); host.backTone() },

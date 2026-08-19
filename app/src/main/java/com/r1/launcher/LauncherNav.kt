@@ -50,6 +50,24 @@ interface LauncherHost {
     fun chatAttachNewestPhoto()
     fun chatPickPhoto(index: Int)
     fun chatSettingsActivate(idx: Int)
+    // --- madlen app ---
+    fun madlenLogin()
+    /** Open the keyboard overlay editing the login field "user" / "pass". */
+    fun madlenOpenLoginField(field: String)
+    /** Commit the open login keyboard buffer into madlenUser / madlenPass. */
+    fun madlenCommitLoginField()
+    /** Push-to-talk: mic open on side-button long press. */
+    fun madlenRecordStart()
+    fun madlenRecordStop()
+    fun madlenNew()
+    fun madlenOpen(id: String)
+    fun madlenRefresh()
+    fun madlenSend()
+    fun madlenStop()
+    fun madlenRetry()
+    fun madlenToggleSpeak()
+    fun madlenPaste()
+    fun madlenSettingsActivate(idx: Int)
     /** Forwarded from the panel's R1CameraView callback. */
     fun onCameraEvent(event: com.r1.launcher.ui.R1CameraView.Event)
     fun startWifiScan()
@@ -485,6 +503,20 @@ fun LauncherState.wheelUp(host: LauncherHost) {
             if (chatSettingsFocus <= 0) { back(); host.backTone() }
             else { chatSettingsFocus--; host.navTone() }
         }
+        Panel.MADLEN_LOGIN -> {
+            if (madlenEditField.isNotBlank()) { /* keyboard owns input */ }
+            else if (madlenLoginFocus <= 0) { back(); host.backTone() }
+            else { madlenLoginFocus--; host.navTone() }
+        }
+        Panel.MADLEN_LIST -> {
+            if (madlenListFocus <= 0) { back(); host.backTone() }
+            else { madlenListFocus--; host.navTone() }
+        }
+        Panel.MADLEN_CHAT -> { madlenPinnedToBottom = false; madlenScrollDir = -1; madlenScrollSeq++ }
+        Panel.MADLEN_SETTINGS -> {
+            if (madlenSettingsFocus <= 0) { back(); host.backTone() }
+            else { madlenSettingsFocus--; host.navTone() }
+        }
         Panel.CAMERA -> {
             if (!cameraFacingIsFront) { host.cameraFlip(); host.navTone() }
         }
@@ -786,6 +818,16 @@ fun LauncherState.wheelDown(host: LauncherHost) {
         Panel.CHAT_SETTINGS -> {
             if (chatSettingsFocus < 8) { chatSettingsFocus++; host.navTone() }
         }
+        Panel.MADLEN_LOGIN -> {
+            if (madlenEditField.isBlank() && madlenLoginFocus < 3) { madlenLoginFocus++; host.navTone() }
+        }
+        Panel.MADLEN_LIST -> {
+            if (madlenListFocus < madlenHistory.size + 1) { madlenListFocus++; host.navTone() }
+        }
+        Panel.MADLEN_CHAT -> { madlenScrollDir = 1; madlenScrollSeq++ }
+        Panel.MADLEN_SETTINGS -> {
+            if (madlenSettingsFocus < 5) { madlenSettingsFocus++; host.navTone() }
+        }
         Panel.CAMERA -> {
             if (cameraFacingIsFront) { host.cameraFlip(); host.navTone() }
         }
@@ -1065,6 +1107,19 @@ fun LauncherState.activate(host: LauncherHost) {
         }
         Panel.CHAT -> if (chatInput.isNotBlank() || chatAttachment != null) host.chatSend()
         Panel.CHAT_SETTINGS -> host.chatSettingsActivate(chatSettingsFocus)
+        Panel.MADLEN_LOGIN -> when (madlenLoginFocus) {
+            0 -> { back(); host.backTone() }
+            1 -> host.madlenOpenLoginField("user")
+            2 -> host.madlenOpenLoginField("pass")
+            3 -> host.madlenLogin()
+        }
+        Panel.MADLEN_LIST -> when (madlenListFocus) {
+            0 -> { back(); host.backTone() }
+            1 -> host.madlenNew()
+            else -> madlenHistory.getOrNull(madlenListFocus - 2)?.let { host.madlenOpen(it.id) }
+        }
+        Panel.MADLEN_CHAT -> if (madlenInput.isNotBlank()) host.madlenSend()
+        Panel.MADLEN_SETTINGS -> host.madlenSettingsActivate(madlenSettingsFocus)
         Panel.CAMERA -> host.cameraShutter()
         Panel.GALLERY -> {
             if (galleryFocus == 0) { back(); host.backTone() }

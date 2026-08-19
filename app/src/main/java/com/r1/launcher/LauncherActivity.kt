@@ -119,6 +119,7 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
     private val translatorPrefs by lazy { com.r1.launcher.translator.TranslatorPrefs.get(this) }
     private val cameraPrefs by lazy { com.r1.launcher.camera.CameraPrefs(this) }
     private val chatPrefs by lazy { com.r1.launcher.chat.ChatPrefs(this) }
+    private val madlenPrefs by lazy { com.r1.launcher.madlen.MadlenPrefs(this) }
     private val translatorClient by lazy { com.r1.launcher.translator.TranslatorClient() }
     /** In-flight Translator TTS HTTP call — cancellable when a new translation
      *  arrives or the user starts a new mic capture. */
@@ -892,6 +893,7 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
                 state.apps.add(AppEntry.Translator)
                 state.apps.add(AppEntry.Meetings)
                 state.apps.add(AppEntry.Chat)
+                state.apps.add(AppEntry.Madlen)
                 state.apps.add(AppEntry.Camera)
                 state.apps.add(AppEntry.Testing)
                 state.apps.add(AppEntry.Settings)
@@ -1278,6 +1280,18 @@ class LauncherActivity : ComponentActivity(), LauncherHost {
                 hydrateChatPrefs()
                 reloadChatHistory()
                 state.openChatList()
+            }
+            AppEntry.Madlen -> {
+                selectTone()
+                hydrateMadlenPrefs()
+                if (madlenPrefs.hasConfig()) {
+                    state.madlenLoggedIn = true
+                    reloadMadlenChats()
+                    state.openMadlenList()
+                } else {
+                    state.madlenLoggedIn = false
+                    state.openMadlenLogin()
+                }
             }
             AppEntry.Camera -> {
                 selectTone()
@@ -5393,6 +5407,9 @@ override fun hermesPasteServerUrlFromClipboard() {
                         } else if (state.panel == Panel.CHAT) {
                             // Push-to-talk. Release is mirrored on UP below.
                             chatRecordStart()
+                        } else if (state.panel == Panel.MADLEN_CHAT) {
+                            // Push-to-talk. Release is mirrored on UP below.
+                            madlenRecordStart()
                         } else if (state.panel == Panel.GALLERY_VIEW) {
                             // Hold-to-talk for the AI image edit. Release is
                             // mirrored in the sideLongFired branch on UP.
@@ -5409,6 +5426,7 @@ override fun hermesPasteServerUrlFromClipboard() {
                         else if (state.panel == Panel.TRANSLATOR) translatorRecordStop()
                         else if (state.panel == Panel.GALLERY_VIEW) galleryAiRecordStop()
                         else if (state.panel == Panel.CHAT) chatRecordStop()
+                        else if (state.panel == Panel.MADLEN_CHAT) madlenRecordStop()
                         sideLongFired = false
                         return true
                     }
@@ -6733,6 +6751,476 @@ override fun hermesPasteServerUrlFromClipboard() {
                 state.chatMsgs.clear()
                 state.chatId = ""
                 toast("all chats deleted")
+            }
+        }
+    }
+
+    // ==================== Madlen app ====================
+
+    private var madlenCall: okhttp3.Call? = null
+    private var madlenTtsCall: okhttp3.Call? = null
+    private var madlenTtsPlayer: android.media.MediaPlayer? = null
+    private var madlenRecorder: com.r1.launcher.voice.StreamingAudioCapture? = null
+    private var madlenPcm: java.io.ByteArrayOutputStream? = null
+    private val madlenJobs = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+        Thread(r, "r1-madlen").apply { isDaemon = true }
+    }
+
+    private fun hydrateMadlenPrefs() {
+        state.madlenUser = madlenPrefs.username
+        state.madlenPass = madlenPrefs.password
+        state.madlenBaseUrl = madlenPrefs.baseUrl
+        state.madlenModel = madlenPrefs.model
+        state.madlenSpeak = madlenPrefs.speak
+        state.madlenTextSize = madlenPrefs.fontSize
+        state.madlenLoggedIn = madlenPrefs.hasConfig()
+    }
+
+    private fun reloadMadlenChats() {
+        val token = madlenPrefs.token
+        if (token.isBlank()) return
+        state.madlenLoading = true
+        state.madlenError = ""
+        madlenJobs.execute {
+            try {
+                val list = com.r1.launcher.madlen.MadlenClient.listChats(token, madlenPrefs.baseUrl)
+                ui.post {
+                    state.madlenLoading = false
+                    state.madlenHistory.clear()
+                    state.madlenHistory.addAll(list)
+                }
+            } catch (e: Exception) {
+                ui.post {
+                    state.madlenLoading = false
+                    if (state.madlenHistory.isEmpty()) {
+                        state.madlenError = e.message?.take(70) ?: "couldn't load chats"
+                    }
+                }
+            }
+        }
+    }
+
+    private fun createMadlenChatAsync(onDone: (String?) -> Unit) {
+        val token = madlenPrefs.token
+        if (token.isBlank()) { onDone(null); return }
+        val base = madlenPrefs.baseUrl
+        val model = madlenPrefs.model
+        madlenJobs.execute {
+            val id =
+                try {
+                    com.r1.launcher.madlen.MadlenClient.createChat(token, base, "R1 sohbet", model)
+                } catch (e: Exception) {
+                    null
+                }
+            ui.post { onDone(id) }
+        }
+    }
+
+    override fun madlenLogin() {
+        val user = state.madlenUser.trim()
+        val pass = state.madlenPass
+        if (user.isBlank() || pass.isBlank()) {
+            state.madlenError = "enter email and password"
+            return
+        }
+        state.madlenLoginBusy = true
+        state.madlenError = ""
+        madlenJobs.execute {
+            try {
+                val token = com.r1.launcher.madlen.MadlenClient.login(user, pass, madlenPrefs.baseUrl)
+                ui.post {
+                    state.madlenLoginBusy = false
+                    madlenPrefs.username = user
+                    madlenPrefs.password = pass
+                    madlenPrefs.token = token
+                    state.madlenLoggedIn = true
+                    reloadMadlenChats()
+                    state.openMadlenList()
+                }
+            } catch (e: Exception) {
+                ui.post {
+                    state.madlenLoginBusy = false
+                    state.madlenError = e.message?.take(70) ?: "login failed"
+                }
+            }
+        }
+    }
+
+    override fun madlenOpenLoginField(field: String) {
+        state.madlenEditField = field
+        state.madlenEditInput = if (field == "user") state.madlenUser else state.madlenPass
+    }
+
+    override fun madlenCommitLoginField() {
+        val v = state.madlenEditInput
+        when (state.madlenEditField) {
+            "user" -> state.madlenUser = v.trim()
+            "pass" -> state.madlenPass = v
+        }
+        state.madlenEditField = ""
+        state.madlenEditInput = ""
+    }
+
+    override fun madlenNew() {
+        madlenStop()
+        state.madlenMsgs.clear()
+        state.madlenId = ""
+        state.madlenTitle = "new chat"
+        state.madlenInput = ""
+        state.madlenStreaming = ""
+        state.madlenError = ""
+        state.madlenModel = madlenPrefs.model
+        state.madlenPinnedToBottom = true
+        state.madlenScrollTick++
+        state.openMadlenChat()
+        selectTone()
+        createMadlenChatAsync { id ->
+            if (id != null) state.madlenId = id
+            else state.madlenError = "couldn't start chat"
+        }
+    }
+
+    override fun madlenOpen(id: String) {
+        madlenStop()
+        val token = madlenPrefs.token
+        state.madlenId = id
+        state.madlenMsgs.clear()
+        state.madlenInput = ""
+        state.madlenStreaming = ""
+        state.madlenError = ""
+        state.madlenWorking = true
+        state.madlenPhaseStartedAt = System.currentTimeMillis()
+        state.madlenTitle = "loading…"
+        state.openMadlenChat()
+        selectTone()
+        if (token.isBlank()) { state.madlenWorking = false; state.openMadlenLogin(); return }
+        madlenJobs.execute {
+            try {
+                val conv = com.r1.launcher.madlen.MadlenClient.getChat(token, madlenPrefs.baseUrl, id)
+                ui.post {
+                    state.madlenId = conv.id
+                    state.madlenTitle = conv.title
+                    state.madlenModel = madlenPrefs.model
+                    state.madlenMsgs.clear()
+                    state.madlenMsgs.addAll(conv.messages)
+                    state.madlenWorking = false
+                    state.madlenScrollTick++
+                }
+            } catch (e: Exception) {
+                ui.post {
+                    state.madlenWorking = false
+                    state.madlenError = e.message?.take(70) ?: "couldn't load chat"
+                }
+            }
+        }
+    }
+
+    override fun madlenRefresh() {
+        reloadMadlenChats()
+        popTone()
+    }
+
+    override fun madlenSend() {
+        val token = madlenPrefs.token
+        if (token.isBlank()) { state.madlenError = "not logged in"; state.openMadlenLogin(); return }
+        val text = state.madlenInput.trim()
+        if (text.isEmpty() || state.madlenWorking) return
+        state.madlenMsgs.add(com.r1.launcher.chat.ChatMsg(role = com.r1.launcher.chat.Role.USER, text = text))
+        state.madlenInput = ""
+        state.madlenKbVisible = false
+        state.madlenPinnedToBottom = true
+        state.madlenScrollTick++
+        cancelMadlenSpeech()
+        val id = state.madlenId
+        if (id.isBlank()) {
+            // No server chat yet — create one, then stream the reply.
+            state.madlenWorking = true
+            state.madlenPhaseStartedAt = System.currentTimeMillis()
+            createMadlenChatAsync { fresh ->
+                if (fresh == null) { state.madlenWorking = false; state.madlenError = "couldn't start chat" }
+                else { state.madlenId = fresh; startMadlenStream(token, text, fresh) }
+            }
+        } else {
+            startMadlenStream(token, text, id)
+        }
+    }
+
+    override fun madlenStop() {
+        runCatching { madlenCall?.cancel() }
+        madlenCall = null
+        cancelMadlenSpeech()
+        val partial = state.madlenStreaming
+        if (partial.isNotBlank()) {
+            state.madlenMsgs.add(com.r1.launcher.chat.ChatMsg(role = com.r1.launcher.chat.Role.ASSISTANT, text = partial))
+        }
+        state.madlenStreaming = ""
+        state.madlenError = ""
+        state.madlenWorking = false
+    }
+
+    override fun madlenRetry() {
+        val token = madlenPrefs.token
+        if (token.isBlank()) { state.openMadlenLogin(); return }
+        val lastUser = state.madlenMsgs.lastOrNull { it.role == com.r1.launcher.chat.Role.USER }
+            ?: return
+        // Drop incomplete assistant turns, then re-ask the last user turn.
+        while (state.madlenMsgs.isNotEmpty() &&
+            state.madlenMsgs.last().role == com.r1.launcher.chat.Role.ASSISTANT
+        ) {
+            state.madlenMsgs.removeAt(state.madlenMsgs.size - 1)
+        }
+        if (state.madlenId.isBlank()) { state.madlenError = "chat not ready"; return }
+        startMadlenStream(token, lastUser.text, state.madlenId)
+    }
+
+    private fun startMadlenStream(token: String, text: String, id: String) {
+        state.madlenWorking = true
+        state.madlenError = ""
+        state.madlenStreaming = ""
+        state.madlenPhaseStartedAt = System.currentTimeMillis()
+        val base = madlenPrefs.baseUrl
+        madlenCall = com.r1.launcher.madlen.MadlenClient.streamMessage(
+            token = token,
+            baseUrl = base,
+            chatId = id,
+            message = text,
+            onDelta = { d ->
+                ui.post { if (state.madlenId == id) state.madlenStreaming += d }
+            },
+            onTitle = { t ->
+                ui.post {
+                    if (state.madlenId == id &&
+                        (state.madlenTitle.isBlank() || state.madlenTitle == "new chat")
+                    ) state.madlenTitle = t
+                }
+            },
+            onDone = {
+                ui.post {
+                    if (state.madlenId != id) return@post
+                    val full = state.madlenStreaming
+                    state.madlenStreaming = ""
+                    madlenCall = null
+                    if (full.isBlank()) {
+                        state.madlenWorking = false
+                        state.madlenError = "empty reply"
+                        return@post
+                    }
+                    state.madlenMsgs.add(com.r1.launcher.chat.ChatMsg(role = com.r1.launcher.chat.Role.ASSISTANT, text = full))
+                    state.madlenWorking = false
+                    state.madlenScrollTick++
+                    if (madlenPrefs.speak) speakMadlen(full)
+                }
+            },
+            onError = { msg ->
+                ui.post {
+                    if (state.madlenId != id) return@post
+                    madlenCall = null
+                    val partial = state.madlenStreaming
+                    state.madlenStreaming = ""
+                    if (partial.isNotBlank()) {
+                        state.madlenMsgs.add(com.r1.launcher.chat.ChatMsg(role = com.r1.launcher.chat.Role.ASSISTANT, text = partial))
+                    }
+                    state.madlenWorking = false
+                    state.madlenError = msg
+                }
+            },
+        )
+    }
+
+    override fun madlenToggleSpeak() {
+        madlenPrefs.speak = !madlenPrefs.speak
+        state.madlenSpeak = madlenPrefs.speak
+        if (!state.madlenSpeak) cancelMadlenSpeech()
+        popTone()
+        toast(if (state.madlenSpeak) "replies will be spoken" else "speech off")
+    }
+
+    override fun madlenPaste() {
+        val clip = getClipboardText()
+        if (clip.isBlank()) { toast("clipboard empty"); return }
+        state.madlenInput = if (state.madlenInput.isBlank()) clip
+            else state.madlenInput.trimEnd() + " " + clip
+    }
+
+    // ---- push to talk ----
+    // Mirrors the chat app: side-button hold captures PCM, then the transcript
+    // is produced by the shared OpenAI Whisper client and optionally auto-sent.
+
+    override fun madlenRecordStart() {
+        if (state.madlenWorking || state.madlenPhase == com.r1.launcher.ChatPhase.RECORDING) return
+        if (cameraPrefs.openAiKey.isNullOrBlank()) {
+            state.madlenError = "no openai key — settings → creds (for transcription)"
+            return
+        }
+        if (!ensureAudioPerm()) return
+        if (transcriberBinder?.isRecording == true) { toastFail("stop recording first"); return }
+        cancelMadlenSpeech()
+
+        state.madlenPhase = com.r1.launcher.ChatPhase.RECORDING
+        state.madlenPartial = ""
+        state.madlenMicLevel = 0
+        state.madlenError = ""
+
+        val sink = java.io.ByteArrayOutputStream()
+        madlenPcm = sink
+        val cap = com.r1.launcher.voice.StreamingAudioCapture()
+        madlenRecorder = cap
+        playRecordStartTone()
+        ui.postDelayed(
+            {
+                if (madlenRecorder !== cap) return@postDelayed
+                cap.start(object : com.r1.launcher.voice.StreamingAudioCapture.Callback {
+                    override fun onPcm(chunk: ByteArray) { synchronized(sink) { sink.write(chunk) } }
+                    override fun onLevel(levelPct: Int) { ui.post { state.madlenMicLevel = levelPct } }
+                    override fun onError(msg: String) {
+                        ui.post {
+                            state.madlenPhase = com.r1.launcher.ChatPhase.ERROR
+                            state.madlenError = "mic: $msg"
+                        }
+                    }
+                })
+            },
+            200,
+        )
+    }
+
+    override fun madlenRecordStop() {
+        val cap = madlenRecorder ?: return
+        madlenRecorder = null
+        cap.close()
+        playRecordStopTone()
+        val sink = madlenPcm
+        madlenPcm = null
+        state.madlenMicLevel = 0
+        ui.postDelayed(
+            {
+                val pcm = sink?.let { synchronized(it) { it.toByteArray() } } ?: ByteArray(0)
+                val key = cameraPrefs.openAiKey
+                if (key.isNullOrBlank()) { state.madlenPhase = com.r1.launcher.ChatPhase.IDLE; return@postDelayed }
+                if (pcm.size < 16_000) {
+                    state.madlenPhase = com.r1.launcher.ChatPhase.IDLE
+                    state.madlenError = "too short — hold longer"
+                    return@postDelayed
+                }
+                state.madlenPhase = com.r1.launcher.ChatPhase.TRANSCRIBING
+                state.madlenWorking = true
+                state.madlenPhaseStartedAt = System.currentTimeMillis()
+                madlenJobs.execute {
+                    when (
+                        val t =
+                            com.r1.launcher.camera
+                                .OpenAiClient
+                                .transcribe(key, pcm)
+                    ) {
+                        is com.r1.launcher.camera.OpenAiClient.Result.Err -> ui.post {
+                            state.madlenPhase = com.r1.launcher.ChatPhase.IDLE
+                            state.madlenWorking = false
+                            state.madlenError = t.message
+                            state.madlenPartial = ""
+                        }
+                        is com.r1.launcher.camera.OpenAiClient.Result.Ok -> ui.post {
+                            state.madlenPartial = ""
+                            state.madlenInput = t.value
+                            state.madlenPhase = com.r1.launcher.ChatPhase.IDLE
+                            state.madlenWorking = false
+                            if (madlenPrefs.voiceAutoSend) madlenSend()
+                        }
+                    }
+                }
+            },
+            250,
+        )
+    }
+
+    /** Reuses the launcher's ElevenLabs voice so madlen sounds like every
+     *  other spoken surface. Mirrors speakChat. */
+    private fun speakMadlen(markdown: String) {
+        val key = voicePrefs.elevenlabsKey
+        if (key.isNullOrBlank()) { toast("set an elevenlabs key for speech"); return }
+        val plain = com.r1.launcher.ui.markdownToSpeech(markdown)
+        if (plain.isBlank()) return
+        val out = java.io.File(cacheDir, "madlen-speech.mp3")
+        madlenTtsCall = com.r1.launcher.voice.ElevenLabsTtsClient.synthesize(
+            text = plain,
+            apiKey = key,
+            voiceId = voicePrefs.voiceId,
+            model = voicePrefs.model,
+            outFile = out,
+        ) { bytes, err ->
+            ui.post {
+                madlenTtsCall = null
+                if (bytes == null) {
+                    if (err != null) toast("speech: $err")
+                    return@post
+                }
+                runCatching {
+                    madlenTtsPlayer?.release()
+                    val mp = android.media.MediaPlayer()
+                    madlenTtsPlayer = mp
+                    mp.setAudioAttributes(
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    mp.setDataSource(out.absolutePath)
+                    mp.setOnCompletionListener { madlenTtsPlayer?.release(); madlenTtsPlayer = null }
+                    mp.prepare()
+                    mp.start()
+                }.onFailure { toast("speech playback failed") }
+            }
+        }
+    }
+
+    private fun cancelMadlenSpeech() {
+        runCatching { madlenTtsCall?.cancel() }
+        madlenTtsCall = null
+        runCatching { madlenTtsPlayer?.stop() }
+        runCatching { madlenTtsPlayer?.release() }
+        madlenTtsPlayer = null
+    }
+
+    override fun madlenSettingsActivate(idx: Int) {
+        if (idx == com.r1.launcher.ui.SAVE_ROW) {
+            val v = state.madlenEditInput.trim()
+            when (state.madlenEditField) {
+                "base" -> {
+                    madlenPrefs.baseUrl = v.ifBlank { com.r1.launcher.madlen.MadlenPrefs.DEFAULT_BASE }
+                    state.madlenBaseUrl = madlenPrefs.baseUrl
+                    toast("base url saved")
+                }
+                "model" -> {
+                    val m = v.ifBlank { com.r1.launcher.madlen.MadlenPrefs.DEFAULT_MODEL }
+                    madlenPrefs.model = m
+                    state.madlenModel = m
+                    toast("model: $m")
+                }
+            }
+            state.madlenEditField = ""
+            state.madlenEditInput = ""
+            return
+        }
+        when (idx) {
+            0 -> { state.back(); backTone() }
+            1 -> { state.madlenEditField = "base"; state.madlenEditInput = state.madlenBaseUrl }
+            2 -> { state.madlenEditField = "model"; state.madlenEditInput = state.madlenModel }
+            3 -> madlenToggleSpeak()
+            4 -> {
+                val next = when (state.madlenTextSize) {
+                    14 -> 16; 16 -> 18; 18 -> 20; 20 -> 14; else -> 16
+                }
+                madlenPrefs.fontSize = next
+                state.madlenTextSize = next
+                popTone()
+            }
+            5 -> {
+                madlenPrefs.logout()
+                state.madlenLoggedIn = false
+                state.madlenId = ""
+                state.madlenMsgs.clear()
+                state.madlenHistory.clear()
+                state.openMadlenLogin()
+                toast("logged out")
             }
         }
     }

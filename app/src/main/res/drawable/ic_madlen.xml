@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Madlen mark: a graduation-cap / mortar-board hint in the same 12x12 pixel
+  idiom as ic_terminal / ic_chat — solid white with a black cut-out, legible
+  at 24dp.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- cap base (diagonal rhombus) -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M3,8 L12,4 L21,8 L12,12 Z" />
+    <!-- cap top fin -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M10,9 L12,8 l0,7 h-3 z
+                          M14,9 L12,8 l0,7 h3 z" />
+    <!-- tassel dot -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M11.3,12.2 h1.4 v1.4 h-1.4 z" />
+    <!-- neck -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M11,16 h2 v4 h-2 z" />
+</vector>

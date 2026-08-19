@@ -254,4 +254,5 @@
     <string name="app_label_testing">testing</string>
     <string name="app_label_camera">camera</string>
     <string name="app_label_chat">chat</string>
+    <string name="app_label_madlen">madlen</string>
 </resources>

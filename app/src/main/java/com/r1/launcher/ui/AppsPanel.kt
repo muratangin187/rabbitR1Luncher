@@ -292,6 +292,7 @@ private fun AppCard(
         AppEntry.Testing -> "_r1_testing"
         AppEntry.Camera -> "_r1_camera"
         AppEntry.Chat -> "_r1_chat"
+        AppEntry.Madlen -> "_r1_madlen"
     }
     // Only the matching synthetic resource is resolved — previous code called
     // painterResource() + stringResource() six times per card (one per
@@ -308,6 +309,7 @@ private fun AppCard(
         AppEntry.Testing -> painterResource(R.drawable.ic_thinking)
         AppEntry.Camera -> painterResource(R.drawable.ic_camera)
         AppEntry.Chat -> painterResource(R.drawable.ic_chat)
+        AppEntry.Madlen -> painterResource(R.drawable.ic_madlen)
     }
 
     var iconPainter by remember(pkg) {
@@ -326,6 +328,7 @@ private fun AppCard(
         AppEntry.Testing -> stringResource(R.string.app_label_testing)
         AppEntry.Camera -> stringResource(R.string.app_label_camera)
         AppEntry.Chat -> stringResource(R.string.app_label_chat)
+        AppEntry.Madlen -> stringResource(R.string.app_label_madlen)
     }
     var label by remember(pkg, syntheticLabel) {
         mutableStateOf(
@@ -463,6 +466,7 @@ private fun cardBackground(entry: AppEntry, idx: Int): Color = when (entry) {
     AppEntry.Testing -> AppThemes.Testing
     AppEntry.Camera -> AppThemes.Camera
     AppEntry.Chat -> AppThemes.Chat
+    AppEntry.Madlen -> AppThemes.Madlen
 }
 
 private fun appKey(entry: AppEntry): String = when (entry) {
@@ -477,6 +481,7 @@ private fun appKey(entry: AppEntry): String = when (entry) {
     AppEntry.Testing -> "testing/testing"
     AppEntry.Camera -> "camera/camera"
     AppEntry.Chat -> "chat/chat"
+    AppEntry.Madlen -> "madlen/madlen"
 }
 
 private fun appContentType(entry: AppEntry): String = when (entry) {
@@ -491,6 +496,7 @@ private fun appContentType(entry: AppEntry): String = when (entry) {
     AppEntry.Testing -> "testing"
     AppEntry.Camera -> "camera"
     AppEntry.Chat -> "chat"
+    AppEntry.Madlen -> "madlen"
 }
 
 class FolderShape : androidx.compose.ui.graphics.Shape {
