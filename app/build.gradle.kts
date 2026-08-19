@@ -1,8 +1,26 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
+}
+
+// Madlen login uses the *public* Firebase Web API key — a client-side app
+// identifier (not a server secret), but we keep it out of tracked source. It
+// is injected at build time from the local environment so it never lands in
+// git history. Populate `madlen.firebaseApiKey` in local.properties or export
+// MADLEN_FIREBASE_API_KEY.
+val madlenFirebaseApiKey: String = run {
+    val local = Properties().apply {
+        val f = file("../local.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    (local.getProperty("madlen.firebaseApiKey")
+        ?: System.getenv("MADLEN_FIREBASE_API_KEY")
+        ?: (findProperty("r1.firebaseApiKey") as String?))
+        ?.trim().orEmpty()
 }
 
 android {
@@ -36,6 +54,7 @@ android {
         // default so carrotOsInfo() falls through to ro.lineage.* / Build fields.
         buildConfigField("String", "CARROT_VERSION", "\"\"")
         buildConfigField("String", "CARROT_BUILD_ID", "\"\"")
+        buildConfigField("String", "MADLEN_FIREBASE_API_KEY", "\"${madlenFirebaseApiKey}\"")
 
         // R1 is single-ABI (arm64-v8a). Restricting filter avoids accidentally
         // pulling in armeabi-v7a / x86_64 / x86 from any future native deps.

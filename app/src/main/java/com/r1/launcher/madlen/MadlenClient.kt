@@ -33,8 +33,13 @@ import java.util.concurrent.TimeUnit
  */
 object MadlenClient {
     private const val TAG = "MadlenClient"
-    private const val FIREBASE_API_KEY = "MADLEN_FIREBASE_API_KEY_FROM_ENV"
     private const val IDENTITY = "https://identitytoolkit.googleapis.com"
+
+    /** Public Firebase Web API key, injected at build time from the local
+     *  environment (README: local.properties `madlen.firebaseApiKey` or the
+     *  MADLEN_FIREBASE_API_KEY env var). Never hardcoded in source. */
+    private val firebaseApiKey: String
+        get() = com.r1.launcher.BuildConfig.MADLEN_FIREBASE_API_KEY
 
     private val http =
         OkHttpClient
@@ -58,6 +63,11 @@ object MadlenClient {
         password: String,
         baseUrl: String,
     ): String {
+        if (firebaseApiKey.isBlank()) {
+            throw IOException(
+                "madlen firebase key not configured — set madlen.firebaseApiKey in local.properties",
+            )
+        }
         // Step 1: raw Firebase ID token.
         val raw = signInWithPassword(username, password)
         // Step 2: madlen custom token (verifies the teacher account).
@@ -79,7 +89,7 @@ object MadlenClient {
         val req =
             Request
                 .Builder()
-                .url("$IDENTITY/v1/accounts:signInWithPassword?key=$FIREBASE_API_KEY")
+                .url("$IDENTITY/v1/accounts:signInWithPassword?key=$firebaseApiKey")
                 .post(body.toRequestBody("application/json".toMediaType()))
                 .build()
         http.newCall(req).execute().use { r ->
@@ -128,7 +138,7 @@ object MadlenClient {
         val req =
             Request
                 .Builder()
-                .url("$IDENTITY/v1/accounts:signInWithCustomToken?key=$FIREBASE_API_KEY")
+                .url("$IDENTITY/v1/accounts:signInWithCustomToken?key=$firebaseApiKey")
                 .post(body.toRequestBody("application/json".toMediaType()))
                 .build()
         http.newCall(req).execute().use { r ->
